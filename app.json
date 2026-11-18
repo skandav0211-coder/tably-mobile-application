@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Tably",
+    "slug": "tably",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.tably.app",
+      "versionCode": 1,
+      "allowBackup": false,
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FAF7F2"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      "expo-font",
+      "expo-asset"
+    ],
+    "extra": {
+      "apiBase": "http://10.0.2.2:3000/"
+    },
+    "icon": "./assets/icon.png",
+    "scheme": "tably",
+    "backgroundColor": "#FAF7F2",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FAF7F2"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

@@ -5,14 +5,15 @@ import { useFonts } from 'expo-font';
 import { Nunito_400Regular, Nunito_700Bold, Nunito_800ExtraBold } from '@expo-google-fonts/nunito';
 import { Fredoka_600SemiBold } from '@expo-google-fonts/fredoka';
 import * as Crypto from 'expo-crypto';
-import { Api } from './core/api';
+import { Api, ApiError } from './core/api';
+import { getApiBase } from './core/apiBase';
 import { Engine, AuthLostError } from './core/engine';
 import { secureKv } from './data/secureKv';
 import { openSqliteStore } from './data/sqliteStore';
 import type { Bill, Me, Route } from './core/types';
-import { Mark, Tone, useTheme } from './ui/kit';
+import { Tone, useTheme } from './ui/kit';
 
-export type ScreenName = 'bill-detail' | 'devices' | 'printer' | 'business' | 'notifications' | 'support' | 'subscription' | 'drafts' | 'mpin';
+export type ScreenName = 'bill-detail' | 'devices' | 'printer' | 'business' | 'notifications' | 'support' | 'subscription' | 'drafts' | 'mpin' | 'inventory';
 export type Tab = 'bill' | 'menu' | 'sales' | 'reports' | 'more';
 interface Ctx {
   eng: Engine; route: Route; setRoute: (r: Route) => void; me: Me | null; reloadMe: () => Promise<void>; refreshAll: () => Promise<void>;
@@ -20,14 +21,16 @@ interface Ctx {
   toast: (msg: string, tone?: Tone) => void; canBill: boolean; unsynced: number; syncNow: () => Promise<void>; signOut: () => void; busyBoot: boolean; updateInfo: { notes?: string; apk_url?: string } | null;
   uuid: () => string; versionName: string; draft: Bill | null; setDraft: (b: Bill | null) => void;
   locked: boolean; unlock: () => void; lockNow: () => void; mpinOn: boolean; refreshMpin: () => Promise<void>;
+  connecting: boolean; startupError: string | null;
 }
 const C = createContext<Ctx>(null as any);
 export const useApp = () => useContext(C);
 
-export function AppProvider({ children }: { children: ReactNode }) {
+export function AppProvider({ children, onReady }: { children: ReactNode; onReady?: () => void }) {
   const [eng, setEng] = useState<Engine | null>(null); const [route, setRoute] = useState<Route>('loading'); const [me, setMe] = useState<Me | null>(null);
   const [stack, setStack] = useState<Ctx['stack']>([]); const [tab, setTab] = useState<Tab>('bill'); const [tick, setTick] = useState(0);
   const [toastMsg, setToastMsg] = useState<{ msg: string; tone: Tone } | null>(null); const [unsynced, setUnsynced] = useState(0); const [updateInfo, setUpdateInfo] = useState<Ctx['updateInfo']>(null);
+  const [connecting, setConnecting] = useState(false); const [startupError, setStartupError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Bill | null>(null); const [fontsReady] = useFonts({ Nunito_400Regular, Nunito_700Bold, Nunito_800ExtraBold, Fredoka_600SemiBold });
   const [locked, setLocked] = useState(false); const [mpinOn, setMpinOn] = useState(false); const bgAt = useRef(0); const lastRefresh = useRef(0); const toastTimer = useRef<any>();
   const buildCode = Number(Constants.expoConfig?.android?.versionCode ?? 1);
@@ -37,23 +40,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { // build the engine once
     (async () => {
+      const apiBase = getApiBase();
       const store = await openSqliteStore(secureKv);
-      const apiBase = String(process.env.EXPO_PUBLIC_API_BASE || Constants.expoConfig?.extra?.apiBase || 'http://10.0.2.2:3000/');
       let e!: Engine;
-      const api = new Api({ baseUrl: apiBase, getToken: () => e.token });
+      const api = new Api({ baseUrl: apiBase, getToken: () => e.token, onConnectionState: setConnecting });
       e = new Engine({ api, secrets: secureKv, store, uuid: () => Crypto.randomUUID(), buildCode, hash: (v: string) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, v), onAuthLost: () => { setLocked(false); setRoute(r => (r === 'loading' ? r : 'login')); } });
       await e.init();
       const has = await e.hasMpin(); setMpinOn(has); if (has && e.token) setLocked(true);   // cold start = locked
       setEng(e);
-    })().catch(err => { toast('Could not open local storage: ' + err.message, 'bad'); });
+    })().catch(err => { setStartupError(err.message); toast('Could not initialize app: ' + err.message, 'bad'); });
   }, [buildCode, toast]);
+  useEffect(() => {
+    if ((eng && fontsReady) || startupError) onReady?.();
+  }, [eng, fontsReady, onReady, startupError]);
 
   const refreshAll = useCallback(async () => {
     if (!eng) return;
+    setStartupError(null);
     try {
       const r = await eng.bootstrap(); setRoute(r); setMe(eng.me); setUnsynced(await eng.unsyncedCount()); lastRefresh.current = Date.now();
       if (r === 'update') { const v = await eng.api.appVersion().catch(() => ({})); setUpdateInfo(v as any); }
-    } catch (e: any) { if (!(e instanceof AuthLostError)) toast(e.message, 'bad'); setRoute(eng.token ? 'home' : 'login'); }
+    } catch (e: any) {
+      if (e instanceof AuthLostError) { setRoute('login'); return; }
+      if (e instanceof ApiError && e.code === 'DEVICE_REVOKED') {
+        setStartupError(e.message); setRoute('device'); toast(e.message, 'warn'); return;
+      }
+      setStartupError(e instanceof Error ? e.message : String(e));
+      setRoute('offline');
+    }
   }, [eng, toast]);
   useEffect(() => { if (eng) void refreshAll(); }, [eng, refreshAll]);
 
@@ -78,8 +92,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const syncNow = useCallback(async () => {
     if (!eng) return;
-    try { const r = await eng.syncBills(); await eng.refreshSession().catch(() => null); setUnsynced(await eng.unsyncedCount()); setMe(await eng.loadMe().catch(() => eng.me));
-      toast(r.pending === 0 ? 'Everything is synced' : `Synced ${r.accepted} bill(s)` + (r.rejected ? `, ${r.rejected} need attention` : ''), r.rejected ? 'warn' : 'ok');
+    try { const r = await eng.syncBills(); const inv = await eng.syncInventoryMovements(); await eng.refreshSession().catch(() => null); setUnsynced(await eng.unsyncedCount()); setMe(await eng.loadMe().catch(() => eng.me));
+      const message = r.pending === 0 && inv.pending === 0 ? 'Everything is synced' : `Synced ${r.accepted} bill(s) and ${inv.accepted} stock change(s)` + (r.rejected ? `, ${r.rejected} bill(s) need attention` : '') + (inv.pending ? `, ${inv.pending} stock change(s) still waiting` : '');
+      toast(message, r.rejected || inv.pending ? 'warn' : 'ok');
     } catch (e: any) { toast(e.message, 'bad'); }
   }, [eng, toast]);
 
@@ -96,10 +111,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Ctx | null>(() => eng ? {
     eng, route, setRoute, me, reloadMe: async () => { setMe(await eng.loadMe().catch(() => eng.me)); }, refreshAll, stack, push, back, tab, setTab, toast, canBill: eng.canBill(), unsynced, syncNow, signOut, busyBoot: false, updateInfo, uuid,
     versionName: String(Constants.expoConfig?.version || '1.0.0'), draft, setDraft, locked, unlock, lockNow, mpinOn, refreshMpin,
-  } : null, [eng, route, me, refreshAll, stack, push, back, tab, toast, unsynced, syncNow, signOut, updateInfo, uuid, tick, draft, locked, mpinOn, unlock, lockNow, refreshMpin]);
+    connecting, startupError,
+  } : null, [eng, route, me, refreshAll, stack, push, back, tab, toast, unsynced, syncNow, signOut, updateInfo, uuid, tick, draft, locked, mpinOn, unlock, lockNow, refreshMpin, connecting, startupError]);
 
   const t = useTheme();
-  if (!value || !fontsReady) return <View style={{ flex: 1, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center' }}><Mark size={96} /></View>;
+  if (!value || !fontsReady) {
+    if (startupError) {
+      return <View style={{ flex: 1, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <Text style={{ color: t.ink, textAlign: 'center' }}>{startupError}</Text>
+      </View>;
+    }
+    return <View style={{ flex: 1, backgroundColor: '#FAF9F5' }} />;
+  }
   return (
     <C.Provider value={value}>
       {children}

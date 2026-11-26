@@ -5,9 +5,12 @@
     "version": "1.0.0",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "android": {
       "package": "com.tably.app",
-      "versionCode": 1,
+      "versionCode": 4,
       "allowBackup": false,
       "permissions": [
         "INTERNET",
@@ -22,6 +25,9 @@
         "backgroundColor": "#FAF7F2"
       }
     },
+    "ios": {
+      "bundleIdentifier": "com.tably.app"
+    },
     "plugins": [
       "expo-secure-store",
       [
@@ -31,21 +37,33 @@
         }
       ],
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-blank.png",
+          "imageWidth": 1,
+          "resizeMode": "contain",
+          "backgroundColor": "#FAF9F5"
+        }
+      ]
     ],
     "extra": {
-      "apiBase": "http://10.0.2.2:3000/"
+      "eas": {
+        "projectId": "4fc86cd2-7d14-453d-b7c5-c0da4c7839e4"
+      }
     },
     "icon": "./assets/icon.png",
     "scheme": "tably",
     "backgroundColor": "#FAF7F2",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash-blank.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FAF7F2"
+      "backgroundColor": "#FAF9F5"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "owner": "skanda_v"
   }
 }

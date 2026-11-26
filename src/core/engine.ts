@@ -1,7 +1,7 @@
 import { Api, ApiError, NetworkError, mapProduct } from './api';
 import { calculate, money, serviceChargeFor } from './calc';
-import type { Bill, BillItem, CartLine, Me, Payment, PayMethod, PrinterConfig, Product, ReportData, Route, Subscription, TaxProfile } from './types';
-import type { KV, Store } from './store';
+import type { Bill, BillItem, CartLine, Me, Payment, PayMethod, PrinterConfig, Product, ReportData, Route, Subscription, TaxProfile, InventoryItem, InventoryItemInput, InventoryMovement, InventoryMovementInput, InventoryOrder, InventorySettings, InventoryUsage, RecipeLine } from './types';
+import type { KV, LocalSaleUsage, Store } from './store';
 
 export class PaidRequiredError extends Error { constructor() { super('Your subscription does not allow new bills right now. Renew or reconnect to continue.'); } }
 export class UnsyncedError extends Error { constructor(public count: number) { super(`${count} bill(s) have not been synced yet.`); } }
@@ -93,6 +93,7 @@ export class Engine {
     // A different business must never see the previous business's local data (tenant isolation on the device).
     if (this.businessId && r.businessId !== this.businessId) {
       await this.d.store.clearBusinessData(); for (const k of ['deviceId', 'slot', 'invoicePrefix', 'businessId']) await this.d.store.kv.del(k);
+      for (const k of ['inventoryItems', 'inventoryMovementQueue', 'inventoryRecipes', 'inventorySettings', 'inventoryOrders:open', 'inventoryOrders:received', 'inventoryOrders:all']) await this.d.store.kv.del(k);
       this.deviceId = null; this.slot = 0; this.invoicePrefix = null; this.businessId = null; await this.clearMpin();
       await this.setTok('deviceToken', null); await this.setEnt(false, null);
     }
@@ -151,13 +152,11 @@ export class Engine {
     this.deviceId = r.deviceId; this.slot = r.slot; this.invoicePrefix = r.invoicePrefix;
     const k = this.d.store.kv; await k.set('deviceId', r.deviceId); await k.set('slot', String(r.slot)); await k.set('invoicePrefix', r.invoicePrefix); return r;
   }
-  /** Re-validates device + subscription with the server. Offline: keeps the bounded local window. */
+  /** Re-validates the device and subscription with the server. */
   async refreshSession(): Promise<Subscription | null> {
     if (!this.deviceToken) return null;
-    try {
-      const r = await this.call(() => this.d.api.refresh());
-      await this.setTok('deviceToken', r.token); await this.setEnt(r.subscription.paid, r.entitlement.validUntil); return r.subscription;
-    } catch (e) { if (e instanceof NetworkError) return null; throw e; }
+    const r = await this.call(() => this.d.api.refresh());
+    await this.setTok('deviceToken', r.token); await this.setEnt(r.subscription.paid, r.entitlement.validUntil); return r.subscription;
   }
   async devices() { return this.call(() => this.d.api.devices()); }
   async removeDevice(id: string) {
@@ -167,36 +166,54 @@ export class Engine {
 
   /** Server decides where the user belongs; local state alone never grants paid access. */
   async bootstrap(): Promise<Route> {
-    try {
-      const v = await this.d.api.appVersion().catch(() => ({} as { min_supported?: number }));
-      if (v.min_supported && v.min_supported > this.d.buildCode) return 'update';
-    } catch { /* ignore */ }
+    const v = await this.d.api.appVersion();
+    if (v.min_supported && v.min_supported > this.d.buildCode) return 'update';
     if (!this.userToken && !this.deviceToken) return 'login';
-    let me: Me;
-    try { me = await this.loadMe(); }
-    catch (e) {
-      if (e instanceof AuthLostError) return 'login';
-      if (e instanceof NetworkError) return this.deviceToken ? 'home' : this.userToken ? 'locked' : 'login';  // offline: billing stays gated by canBill()
-      throw e;
-    }
+    const me = await this.loadMe();
     if (!me.business) return 'business';
     // Registered but not subscribed: the owner can look around and press Subscribe; every paid feature stays locked.
     if (!this.deviceToken) return me.subscription.paid ? 'device' : 'locked';
-    await this.refreshSession().catch(() => null);
-    this.me = await this.call(() => this.d.api.me()).catch(() => this.me);
-    void this.syncBills().catch(() => null);
+    await this.refreshSession();
+    this.me = await this.call(() => this.d.api.me());
+    await this.syncBills();
     return 'home';
   }
 
   // ───────── catalogue ─────────
-  async products(refresh = true): Promise<Product[]> {
-    if (refresh && this.token) { try { const r = await this.call(() => this.d.api.products()); await this.d.store.replaceProducts(r.map(mapProduct)); } catch (e) { if (!(e instanceof NetworkError)) throw e; } }
-    return this.d.store.listProducts();
+  async products(refresh = true, includeArchived = false): Promise<Product[]> {
+    if (refresh && this.token) { try { const r = await this.call(() => this.d.api.products(includeArchived)); await this.d.store.replaceProducts(r.map(mapProduct)); } catch (e) { if (!(e instanceof NetworkError)) throw e; } }
+    const local=await this.d.store.listProducts(); return includeArchived?local:local.filter(p=>p.active);
   }
+  async archiveProduct(id:string){ await this.call(()=>this.d.api.archiveProduct(id)); return this.products(true); }
+  async restoreProduct(id:string){ await this.call(()=>this.d.api.restoreProduct(id)); return this.products(true); }
   async saveProduct(id: string | null, p: Partial<Omit<Product, 'id'>>) {
     const body: Record<string, unknown> = { ...p };
     if (id) await this.call(() => this.d.api.updateProduct(id, body)); else await this.call(() => this.d.api.addProduct(body));
     return this.products(true);
+  }
+  async saveProducts(entries: { id: string | null; product: Partial<Omit<Product, 'id'>> }[]) {
+    let saved = 0;
+    const failures: { index: number; name: string; error: string }[] = [];
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      try {
+        const body: Record<string, unknown> = { ...entry.product };
+        if (entry.id) await this.call(() => this.d.api.updateProduct(entry.id as string, body));
+        else await this.call(() => this.d.api.addProduct(body));
+        saved++;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        failures.push({ index, name: entry.product.name || 'Unnamed item', error: message });
+        if (e instanceof NetworkError || e instanceof AuthLostError) {
+          for (let remaining = index + 1; remaining < entries.length; remaining++) {
+            failures.push({ index: remaining, name: entries[remaining].product.name || 'Unnamed item', error: `Not attempted after the connection failed: ${message}` });
+          }
+          break;
+        }
+      }
+    }
+    const products = await this.products(true);
+    return { saved, failures, products };
   }
   taxProfile(): TaxProfile {
     try { const t = JSON.parse(this.me?.business?.tax_profile || '{}'); return { serviceChargePercent: Number(t.serviceChargePercent) || 0, defaultTaxRate: Number(t.defaultTaxRate) || 0 }; } catch { return { serviceChargePercent: 0, defaultTaxRate: 0 }; }
@@ -208,7 +225,7 @@ export class Engine {
     return { invoiceNo: null, status: 'draft', createdAt: new Date(this.now()).toISOString(), cashier: this.cashier, customerName: null, customerMobile: null, tableNo: null, notes: null,
       items: [], payments: [], subtotal: 0, discount: 0, tax: 0, serviceCharge: 0, total: 0, synced: false, syncError: null, printCount: 0, statusReason: null, ...b };
   }
-  private items(lines: CartLine[]): BillItem[] { return lines.map(l => ({ name: l.name, qty: l.qty, price: l.price, taxRate: l.taxRate })); }
+  private items(lines: CartLine[]): BillItem[] { return lines.map(l => ({ name: l.name, qty: l.qty, price: l.price, taxRate: l.taxRate, productId:l.productId, variantName:l.variantName, addons:l.addons, custom:l.custom })); }
 
   async saveDraft(a: { cartId: string; lines: CartLine[]; discount: number; serviceChargePercent: number; customerName?: string; customerMobile?: string; tableNo?: string; notes?: string }) {
     if (!a.lines.length) throw new Error('Add at least one item.');
@@ -225,6 +242,8 @@ export class Engine {
     const existing = await this.d.store.getBill(a.cartId); if (existing && existing.status !== 'draft') return existing;
     if (!this.canBill()) throw new PaidRequiredError();
     if (!this.invoicePrefix) throw new Error('This device is not registered yet.');
+    const subscription = await this.refreshSession();
+    if (!subscription?.paid || !this.canBill()) throw new PaidRequiredError();
     if (!a.lines.length) throw new Error('Add at least one item.');
     if (a.lines.some(l => !(l.qty > 0) || !(l.price >= 0))) throw new Error('Invalid quantity or price.');
     if (!(a.discount >= 0)) throw new Error('Discount cannot be negative.');
@@ -239,12 +258,36 @@ export class Engine {
     const bill = this.base({ clientTxnId: a.cartId, invoiceNo: `${this.invoicePrefix}-${String(n).padStart(6, '0')}`, status: 'completed', items: this.items(a.lines), payments,
       customerName: a.customerName || null, customerMobile: a.customerMobile || null, tableNo: a.tableNo || null, notes: a.notes || null,
       subtotal: t.subtotal, discount: t.discount, tax: t.tax, serviceCharge: t.serviceCharge, total: t.total });
-    await this.d.store.saveBill(bill); return bill;
+    await this.d.store.saveBillWithLocalSaleUsage(bill, await this.localSaleUsage(a.lines, a.cartId));
+    return bill;
+  }
+  private async localSaleUsage(lines: CartLine[], clientTxnId: string): Promise<LocalSaleUsage[]> {
+    try {
+      const recipes = await this.cachedValue<Record<string, RecipeLine[]>>(this.inventoryCacheKey('recipes')) || {};
+      const usage = new Map<string, number>();
+      for (const line of lines) {
+        if (!line.productId) continue;
+        const selected = new Set<string>();
+        if (!line.custom && line.variantName) selected.add(line.variantName.trim().toLowerCase());
+        if (!line.custom) for (const addon of line.addons || []) selected.add(addon.trim().toLowerCase());
+        for (const recipe of recipes[line.productId] || []) {
+          if (recipe.variantName && !selected.has(recipe.variantName.trim().toLowerCase())) continue;
+          const amount = Math.round((recipe.qty * line.qty + Number.EPSILON) * 1000) / 1000;
+          if (Number.isFinite(amount) && amount > 0) usage.set(recipe.inventoryItemId, Math.round(((usage.get(recipe.inventoryItemId) || 0) + amount + Number.EPSILON) * 1000) / 1000);
+        }
+      }
+      return [...usage].map(([inventoryItemId, qty]) => ({ clientTxnId, inventoryItemId, qty }));
+    } catch (error) {
+      console.warn('Could not calculate local inventory usage; the bill will still be saved.', error);
+      return [];
+    }
   }
   /** Void / refund of a completed bill (audited server-side with the reason). */
   async changeStatus(b: Bill, status: 'void' | 'refunded', reason: string): Promise<Bill> {
     if (b.status !== 'completed') throw new Error('Only completed bills can be voided or refunded.');
     if (!reason.trim()) throw new Error('A reason is required.');
+    await this.d.api.appVersion();
+    await this.d.api.appVersion();
     if (!this.canBill()) throw new PaidRequiredError();
     const nb = { ...b, status, statusReason: reason.trim().slice(0, 300), synced: false, syncError: null, remote: undefined };
     await this.d.store.saveBill(nb); return nb;
@@ -259,7 +302,7 @@ export class Engine {
       const chunk = list.slice(i, i + 100);
       const res = await this.call(() => this.d.api.syncBills(chunk.map(b => ({
         clientTxnId: b.clientTxnId, invoiceNo: b.invoiceNo, status: b.status, createdAt: b.createdAt, cashier: b.cashier, customerName: b.customerName, customerMobile: b.customerMobile,
-        tableNo: b.tableNo, notes: b.notes, items: b.items, payments: b.payments, discount: b.discount, serviceCharge: b.serviceCharge, reason: b.statusReason || undefined }))));
+        tableNo: b.tableNo, notes: b.notes, items: b.items.map(i => ({ name:i.name, qty:i.qty, price:i.price, taxRate:i.taxRate, productId:i.productId, variantName:i.variantName, addons:i.addons, custom:i.custom })), payments: b.payments, discount: b.discount, serviceCharge: b.serviceCharge, reason: b.statusReason || undefined }))));
       for (const r of res.results) {
         const b = chunk.find(x => x.clientTxnId === r.clientTxnId); if (!b) continue;
         const cur = await this.d.store.getBill(b.clientTxnId); if (!cur) continue;
@@ -269,6 +312,209 @@ export class Engine {
     }
     await this.d.store.kv.set('lastSyncAt', new Date(this.now()).toISOString());
     return { pending: list.length, accepted, rejected };
+  }
+
+  // ───────── inventory ─────────
+  private async cachedInventory(): Promise<InventoryItem[]> {
+    const raw = await this.d.store.kv.get('inventoryItems');
+    return raw ? JSON.parse(raw) as InventoryItem[] : [];
+  }
+  private async cachedValue<T>(key: string): Promise<T | null> {
+    const raw = await this.d.store.kv.get(key);
+    return raw ? JSON.parse(raw) as T : null;
+  }
+  private inventoryCacheKey(key: string) { return `inventory:${this.businessId || 'unbound'}:${key}`; }
+  private saveCachedValue(key: string, value: unknown) {
+    return this.d.store.kv.set(key, JSON.stringify(value));
+  }
+  private async estimateInventory(items: InventoryItem[]): Promise<InventoryItem[]> {
+    const queue = await this.queuedInventoryMovements();
+    const result = items.map(item => ({ ...item }));
+    for (const move of queue) {
+      const item = result.find(row => row.id === move.inventoryItemId);
+      if (!item) continue;
+      if (move.type === 'wastage') item.onHand -= move.qty;
+      else if (move.type === 'adjustment' || move.type === 'opening') item.onHand = move.qty;
+      else item.onHand += move.qty;
+      item.onHand = Math.round((item.onHand + Number.EPSILON) * 1000) / 1000;
+      item.status = item.onHand <= 0 ? 'out' : item.onHand <= item.reorderLevel ? 'low' : 'ok';
+    }
+    for (const move of await this.d.store.listPendingLocalSaleUsage()) {
+      const item = result.find(row => row.id === move.inventoryItemId);
+      if (!item) continue;
+      item.onHand = Math.round((item.onHand - move.qty + Number.EPSILON) * 1000) / 1000;
+      item.status = item.onHand <= 0 ? 'out' : item.onHand <= item.reorderLevel ? 'low' : 'ok';
+    }
+    return result;
+  }
+  async inventoryItems(includeArchived = false): Promise<InventoryItem[]> {
+    const cached = await this.cachedInventory();
+    try {
+      const { items } = await this.call(() => this.d.api.inventoryItems(true));
+      await this.saveCachedValue('inventoryItems', items);
+      const estimated = await this.estimateInventory(items);
+      return includeArchived ? estimated : estimated.filter(item => item.active);
+    } catch (error) {
+      if (!(error instanceof NetworkError)) throw error;
+      if (!cached.length) throw error;
+      const estimated = await this.estimateInventory(cached);
+      return includeArchived ? estimated : estimated.filter(item => item.active);
+    }
+  }
+  async saveInventoryItem(id: string | null, item: InventoryItemInput, openingQty?: number): Promise<InventoryItem> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    const saved = await this.call(() => id
+      ? this.d.api.updateInventoryItem(id, item)
+      : this.d.api.createInventoryItem({ ...item, ...(openingQty == null ? {} : { openingQty }), clientMoveId: this.d.uuid() }));
+    await this.upsertInventoryCache(saved);
+    return saved;
+  }
+  async archiveInventoryItem(id: string): Promise<InventoryItem> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    const item = await this.call(() => this.d.api.archiveInventoryItem(id));
+    await this.upsertInventoryCache(item);
+    return item;
+  }
+  async restoreInventoryItem(id: string): Promise<InventoryItem> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    const item = await this.call(() => this.d.api.restoreInventoryItem(id));
+    await this.upsertInventoryCache(item);
+    return item;
+  }
+  private async upsertInventoryCache(item: InventoryItem) {
+    const items = await this.cachedInventory();
+    const next = items.some(row => row.id === item.id) ? items.map(row => row.id === item.id ? item : row) : [...items, item];
+    await this.saveCachedValue('inventoryItems', next);
+    return next;
+  }
+  private async refreshInventoryItems() {
+    const { items } = await this.call(() => this.d.api.inventoryItems(true));
+    await this.saveCachedValue('inventoryItems', items);
+    return items;
+  }
+  private async queuedInventoryMovements(): Promise<InventoryMovementInput[]> {
+    const raw = await this.d.store.kv.get('inventoryMovementQueue');
+    return raw ? JSON.parse(raw) as InventoryMovementInput[] : [];
+  }
+  async queueInventoryMovement(movement: InventoryMovementInput): Promise<'synced' | 'queued'> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    if (!Number.isFinite(movement.qty) || movement.qty <= 0) throw new Error('Enter a quantity greater than zero.');
+    try {
+      await this.call(() => this.d.api.createInventoryMovement(movement));
+      await this.refreshInventoryItems();
+      return 'synced';
+    } catch (error) {
+      if (!(error instanceof NetworkError)) throw error;
+      const queue = await this.queuedInventoryMovements();
+      if (!queue.some(entry => entry.clientMoveId === movement.clientMoveId)) queue.push(movement);
+      await this.d.store.kv.set('inventoryMovementQueue', JSON.stringify(queue));
+      return 'queued';
+    }
+  }
+  async syncInventoryMovements(): Promise<{ pending: number; accepted: number }> {
+    const queue = await this.queuedInventoryMovements();
+    if (!queue.length || !this.token) return { pending: queue.length, accepted: 0 };
+    let accepted = 0;
+    for (const movement of queue) {
+      try {
+        await this.call(() => this.d.api.createInventoryMovement(movement));
+        accepted++;
+      } catch (error) {
+        if (error instanceof NetworkError) break;
+        throw error;
+      }
+    }
+    const remaining = queue.slice(accepted);
+    await this.d.store.kv.set('inventoryMovementQueue', JSON.stringify(remaining));
+    if (accepted) await this.refreshInventoryItems();
+    return { pending: remaining.length, accepted };
+  }
+  inventoryMovementQueueCount() { return this.queuedInventoryMovements().then(rows => rows.length); }
+  inventoryMovements(itemId: string, limit = 100): Promise<InventoryMovement[]> {
+    const key = this.inventoryCacheKey(`movements:${itemId}`);
+    return this.call(() => this.d.api.inventoryMovements({ item: itemId, limit: String(limit) })).then(async r => {
+      await this.saveCachedValue(key, r.movements);
+      return r.movements;
+    }).catch(async error => {
+      if (!(error instanceof NetworkError)) throw error;
+      const cached = await this.cachedValue<InventoryMovement[]>(key);
+      if (!cached) throw error;
+      return cached;
+    });
+  }
+  inventoryRecipes(): Promise<Record<string, RecipeLine[]>> {
+    const key = this.inventoryCacheKey('recipes');
+    return this.call(() => this.d.api.inventoryRecipes()).then(async r => {
+      await this.saveCachedValue(key, r.recipes);
+      return r.recipes;
+    }).catch(async error => {
+      if (!(error instanceof NetworkError)) throw error;
+      const cached = await this.cachedValue<Record<string, RecipeLine[]>>(key);
+      if (!cached) throw error;
+      return cached;
+    });
+  }
+  async saveInventoryRecipe(productId: string, lines: RecipeLine[]) {
+    if (!this.canBill()) throw new PaidRequiredError();
+    const saved = await this.call(() => this.d.api.saveInventoryRecipe(productId, lines));
+    const recipes = await this.cachedValue<Record<string, RecipeLine[]>>(this.inventoryCacheKey('recipes')) || {};
+    recipes[productId] = saved.lines;
+    await this.saveCachedValue(this.inventoryCacheKey('recipes'), recipes);
+    return saved.lines;
+  }
+  inventoryUsage(from: string, to: string): Promise<InventoryUsage> {
+    const key = this.inventoryCacheKey(`usage:${from.slice(0, 10)}:${to.slice(0, 10)}`);
+    return this.call(() => this.d.api.inventoryUsage(from, to)).then(async usage => {
+      await this.saveCachedValue(key, usage);
+      return usage;
+    }).catch(async error => {
+      if (!(error instanceof NetworkError)) throw error;
+      const cached = await this.cachedValue<InventoryUsage>(key);
+      if (!cached) throw error;
+      return cached;
+    });
+  }
+  inventorySettings(): Promise<InventorySettings> {
+    const key = this.inventoryCacheKey('settings');
+    return this.call(() => this.d.api.inventorySettings()).then(async settings => {
+      await this.saveCachedValue(key, settings);
+      return settings;
+    }).catch(async error => {
+      if (!(error instanceof NetworkError)) throw error;
+      const cached = await this.cachedValue<InventorySettings>(key);
+      if (!cached) throw error;
+      return cached;
+    });
+  }
+  async saveInventorySettings(settings: InventorySettings): Promise<InventorySettings> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    const saved = await this.call(() => this.d.api.saveInventorySettings(settings));
+    await this.saveCachedValue(this.inventoryCacheKey('settings'), saved);
+    return saved;
+  }
+  inventoryOrders(status: 'open' | 'received' | 'all' = 'open'): Promise<InventoryOrder[]> {
+    const key = this.inventoryCacheKey(`orders:${status}`);
+    return this.call(() => this.d.api.inventoryOrders(status)).then(async r => {
+      await this.saveCachedValue(key, r.orders);
+      return r.orders;
+    }).catch(async error => {
+      if (!(error instanceof NetworkError)) throw error;
+      const cached = await this.cachedValue<InventoryOrder[]>(key);
+      if (!cached) throw error;
+      return cached;
+    });
+  }
+  createInventoryOrder(order: { supplier?: string; note?: string; lines: { inventoryItemId: string; qty: number }[] }): Promise<InventoryOrder> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    return this.call(() => this.d.api.createInventoryOrder({ ...order, clientMoveId: this.d.uuid() }));
+  }
+  receiveInventoryOrder(id: string, lines: { inventoryItemId: string; qty: number; unitCost?: number }[]): Promise<InventoryOrder> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    return this.call(() => this.d.api.receiveInventoryOrder(id, lines, this.d.uuid()));
+  }
+  cancelInventoryOrder(id: string): Promise<InventoryOrder> {
+    if (!this.canBill()) throw new PaidRequiredError();
+    return this.call(() => this.d.api.cancelInventoryOrder(id));
   }
 
   // ───────── history & reports ─────────

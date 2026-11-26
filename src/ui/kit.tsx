@@ -1,7 +1,8 @@
 import React, { ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TextInputProps, useColorScheme, useWindowDimensions, View, ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TextInputProps, useWindowDimensions, View, ViewStyle } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useThemeMode } from './theme';
 
 const light = { bg: '#FAF7F2', card: '#FFFFFF', ink: '#2B2523', mut: '#7A6B62', line: '#EADFD3', pri: '#C96510', priInk: '#FFFFFF', priSoft: '#FFF1E2', brown: '#7A4A2B', side: '#2B2523', ok: '#0B7A43', okSoft: '#E8F6EE', warn: '#A85A00', warnSoft: '#FFF4DC', bad: '#B42318', badSoft: '#FDECEB' };
 const dark: typeof light = { bg: '#1B1614', card: '#262020', ink: '#F4EDE6', mut: '#A9998F', line: '#3A312D', pri: '#F59A4A', priInk: '#221A15', priSoft: '#3A2819', brown: '#D6A47C', side: '#14100F', ok: '#5FD394', okSoft: '#14301F', warn: '#F6C35C', warnSoft: '#33270F', bad: '#F58A80', badSoft: '#3A1A18' };
@@ -13,7 +14,7 @@ export function useLayout() {
 export const tileColors = ['#E07B1F', '#7A4A2B', '#B5651D', '#C0392B', '#8E6C4A', '#D4A017', '#A0522D'];
 export const colorFor = (s: string) => tileColors[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % tileColors.length];
 export type Theme = typeof light;
-export const useTheme = (): Theme => (useColorScheme() === 'dark' ? dark : light);
+export const useTheme = (): Theme => useThemeMode().mode === 'dark' ? dark : light;
 export type Tone = 'ok' | 'warn' | 'bad' | 'info';
 
 export function Screen({ children, scroll = true, pad = true, max = 600 }: { children: ReactNode; scroll?: boolean; pad?: boolean; max?: number }) {
@@ -60,7 +61,7 @@ export function Pill({ text, tone = 'info' }: { text: string; tone?: Tone }) {
 }
 export function Chip({ text, on, onPress }: { text: string; on?: boolean; onPress: () => void }) {
   const t = useTheme();
-  return <Pressable onPress={onPress} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 99, backgroundColor: on ? t.pri : t.card, borderWidth: 1, borderColor: on ? t.pri : t.line }}><Text style={{ color: on ? t.priInk : t.ink, fontFamily: F.bold }}>{text}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ selected: !!on }} onPress={onPress} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 99, backgroundColor: on ? t.pri : t.card, borderWidth: 1, borderColor: on ? t.pri : t.line }}><Text style={{ color: on ? t.priInk : t.ink, fontFamily: F.bold }}>{text}</Text></Pressable>;
 }
 export function Banner({ tone = 'info', children, action }: { tone?: Tone; children: ReactNode; action?: { title: string; onPress: () => void } }) {
   const t = useTheme(); const m = { ok: [t.okSoft, t.ok], warn: [t.warnSoft, t.warn], bad: [t.badSoft, t.bad], info: [t.priSoft, t.pri] }[tone];
@@ -73,15 +74,15 @@ export function Toggle({ label, value, onChange }: { label: string; value: boole
 export function Empty({ text }: { text: string }) { return <View style={{ padding: 32, alignItems: 'center' }}><Txt mut>{text}</Txt></View>; }
 export function Divider() { const t = useTheme(); return <View style={{ height: 1, backgroundColor: t.line }} />; }
 export function Sheet({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: ReactNode }) {
-  const t = useTheme();
+  const t = useTheme(); const insets = useSafeAreaInsets(); const { height } = useWindowDimensions();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: 'rgba(10,15,30,.55)', justifyContent: 'flex-end' }}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '92%', paddingTop: 14 }}>
-            <Row style={{ justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 }}><H2>{title}</H2><Pressable onPress={onClose} hitSlop={12}><Text style={{ color: t.mut, fontSize: 22 }}>✕</Text></Pressable></Row>
-            <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 4, gap: 12, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+          <View style={{ backgroundColor: t.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: height - insets.top - 12, paddingTop: 16, paddingBottom: Math.max(insets.bottom, 12) }}>
+            <Row style={{ justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 12 }}><H2>{title}</H2><Pressable accessibilityRole="button" accessibilityLabel="Close sheet" onPress={onClose} hitSlop={12} style={{ padding: 4 }}><Text style={{ color: t.mut, fontSize: 22 }}>✕</Text></Pressable></Row>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 4, gap: 14, paddingBottom: 20 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -96,12 +97,23 @@ export function Header({ title, onBack, right }: { title: string; onBack?: () =>
   const t = useTheme();
   return <Row style={{ paddingHorizontal: 16, paddingVertical: 12, backgroundColor: t.bg, justifyContent: 'space-between' }}><Row style={{ flex: 1 }}>{onBack ? <Pressable onPress={onBack} hitSlop={12} style={{ padding: 4 }}><Ionicons name="chevron-back" size={26} color={t.ink} /></Pressable> : null}<H1>{title}</H1></Row>{right}</Row>;
 }
-export function Tile({ name, sub, onPress, fav, dim }: { name: string; sub: string; onPress: () => void; fav?: boolean; dim?: boolean }) {
+export function Tile({ name, sub, onPress, onDecrease, quantity, fav, dim }: { name: string; sub: string; onPress: () => void; onDecrease?: () => void; quantity?: number; fav?: boolean; dim?: boolean }) {
   const t = useTheme(); const c = colorFor(name);
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ flex: 1, margin: 5, minHeight: 112, borderRadius: 18, backgroundColor: t.card, borderWidth: 1, borderColor: t.line, padding: 12, gap: 6, opacity: dim ? 0.5 : pressed ? 0.85 : 1, shadowColor: '#7A4A2B', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 })}>
-      <Row style={{ justifyContent: 'space-between' }}><View style={{ width: 38, height: 38, borderRadius: 13, backgroundColor: c, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#fff', fontFamily: F.head, fontSize: 18 }}>{name.trim().charAt(0).toUpperCase()}</Text></View>{fav ? <Ionicons name="star" size={16} color="#D4A017" /> : null}</Row>
-      <Text numberOfLines={2} style={{ color: t.ink, fontFamily: F.bold, fontSize: 15 }}>{name}</Text><Text style={{ color: t.pri, fontFamily: F.heavy, fontSize: 15 }}>{sub}</Text>
-    </Pressable>
+    <View style={{ flex: 1, margin: 5, minHeight: quantity === undefined ? 112 : 158, borderRadius: 18, backgroundColor: t.card, borderWidth: 1, borderColor: t.line, padding: 12, gap: 8, opacity: dim ? 0.5 : 1, shadowColor: '#7A4A2B', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 }}>
+      <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => ({ flex: 1, gap: 6, opacity: pressed ? 0.85 : 1 })}>
+        <Row style={{ justifyContent: 'space-between' }}><View style={{ width: 38, height: 38, borderRadius: 13, backgroundColor: c, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#fff', fontFamily: F.head, fontSize: 18 }}>{name.trim().charAt(0).toUpperCase()}</Text></View>{fav ? <Ionicons name="star" size={16} color="#D4A017" /> : null}</Row>
+        <Text numberOfLines={2} style={{ color: t.ink, fontFamily: F.bold, fontSize: 15 }}>{name}</Text><Text style={{ color: t.pri, fontFamily: F.heavy, fontSize: 15 }}>{sub}</Text>
+      </Pressable>
+      {quantity !== undefined && onDecrease ? <Row style={{ justifyContent: 'space-between', gap: 6 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Remove one ${name}`} disabled={quantity === 0} onPress={onDecrease} style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: t.line, alignItems: 'center', justifyContent: 'center', opacity: quantity === 0 ? 0.4 : 1 }}>
+          <Ionicons name={quantity === 1 ? 'trash-outline' : 'remove'} size={18} color={t.ink} />
+        </Pressable>
+        <Text accessibilityLabel={`${quantity} ${name} in bill`} style={{ color: t.ink, minWidth: 22, textAlign: 'center', fontFamily: F.heavy, fontSize: 15 }}>{quantity}</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Add one ${name}`} onPress={onPress} style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: t.pri, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="add" size={20} color={t.priInk} />
+        </Pressable>
+      </Row> : null}
+    </View>
   );
 }

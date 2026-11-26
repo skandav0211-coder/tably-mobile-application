@@ -150,6 +150,7 @@ export function SubscriptionScreen({ embedded }: { embedded?: boolean }) {
       <Card>
         <Row style={{ justifyContent: 'space-between' }}><H2>Status</H2><Pill text={STATUS_LABEL[s.status] || s.status} tone={TONE[s.status] || 'info'} /></Row>
         {s.endDate ? <Txt>Valid until <Txt bold>{new Date(s.endDate).toLocaleDateString()}</Txt>{s.daysLeft != null ? ` (${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'} left)` : ''}</Txt> : null}
+        {s.paid && s.currentPlanMonths ? <Txt>{s.currentPlanMonths}-month active term</Txt> : null}
         {s.message ? <Banner tone={s.status === 'rejected' || s.status === 'suspended' ? 'bad' : 'info'}>Message from support: {s.message}</Banner> : null}
         {s.status === 'pending' ? <Txt mut>Your payment is being reviewed. Billing unlocks once it is approved. This usually does not need any action from you.</Txt> : null}
         {s.reminder ? <Banner tone="warn">Your subscription is expiring soon. Submit a renewal below to avoid interruption.</Banner> : null}

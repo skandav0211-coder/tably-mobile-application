@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { receiptLines, toEscPos, testPageLines, invoiceHtml } from '../src/core/receipt';
+import { buildReceipt, receiptLines, toEscPos, testPageLines, invoiceHtml } from '../src/core/receipt';
 import { calculate } from '../src/core/calc';
 import type { Bill } from '../src/core/types';
 
@@ -13,7 +13,7 @@ const header = { name: 'The Brew House & Co', address: '12 MG Road, Bengaluru 56
 for (const w of [58, 80] as const) test(`receipt fits ${w} mm (${w === 80 ? 48 : 32} cols) and has every SRS §6.4 field`, () => {
   const cols = w === 80 ? 48 : 32; const L = receiptLines(header, bill, w, false); const txt = L.map(l => l.text).join('\n');
   for (const l of L) assert.ok(l.text.length <= (l.big ? cols : cols), `line too long: "${l.text}"`);
-  for (const must of ['The Brew House', 'MG Road', '9800000001', 'D1-000007', '17/11/2026', 'Cashier: Asha', 'Cappuccino', '2 x 150.00', '300.00', 'Subtotal', 'Discount', 'Tax @5%', 'Tax @18%', 'Service charge', 'TOTAL', 'UPI', 'Thank you!', 'GSTIN'])
+  for (const must of ['The Brew House', 'MG Road', '9800000001', 'D1-000007', '17-11-2026', 'Cashier: Asha', 'Cappuccino', 'Qty', 'Rate', '300.00', 'Subtotal', 'Discount', 'Tax @5%', 'Tax @18%', 'Service charge', 'TOTAL', 'UPI', 'Thank you!', 'GSTIN'])
     assert.ok(txt.includes(must), `missing "${must}"`);
   assert.ok(!txt.includes('COPY'));
   assert.ok(/^[\x20-\x7E\n]+$/.test(txt), 'non-printable characters would corrupt thermal output');
@@ -33,4 +33,16 @@ test('tax breakup adds up to the stored tax; refunds/voids are labelled', () => 
 test('PDF invoice HTML escapes user-supplied text', () => {
   const h = invoiceHtml({ ...header, name: '<script>x</script>' }, bill, false);
   assert.ok(!h.includes('<script>x') && h.includes('&lt;script&gt;') && h.includes('&lt;b&gt;Ravi&lt;/b&gt;'));
+  assert.ok(!h.includes('TAX INVOICE'));
+  assert.ok(h.includes('₹'));
+});
+
+test('structured receipts share the same rows for 32/48-column previews and display-currency PDFs', () => {
+  for (const width of [32, 48] as const) {
+    const lines = buildReceipt(bill, header, { width, format: 'display' });
+    assert.ok(lines.some(line => line.kind === 'columns' && line.cols?.includes('Amount')));
+    assert.ok(lines.some(line => line.text.includes('Cappuccino')));
+    assert.ok(lines.some(line => line.text.includes('₹')));
+    assert.ok(lines.every(line => line.text.length <= width), `display receipt line exceeds ${width} columns`);
+  }
 });

@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
 import type { Bill, Product } from '../core/types';
-import type { KV, Store } from '../core/store';
+import type { KV, LocalSaleUsage, Store } from '../core/store';
 
 /** Local-first storage. With the SQLCipher build option (see app.json) the file is encrypted with a Keystore-held key;
  *  on plain SQLite (e.g. Expo Go) PRAGMA key is a harmless no-op. */
@@ -16,6 +16,11 @@ export async function openSqliteStore(secrets: KV): Promise<Store> {
     CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS bills (clientTxnId TEXT PRIMARY KEY, status TEXT NOT NULL, createdAt TEXT NOT NULL, synced INTEGER NOT NULL, json TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS ix_bills_sync ON bills(synced, status);
+    CREATE TABLE IF NOT EXISTS local_sale_usage (
+      clientTxnId TEXT NOT NULL REFERENCES bills(clientTxnId) ON DELETE CASCADE,
+      inventoryItemId TEXT NOT NULL, qty REAL NOT NULL,
+      PRIMARY KEY(clientTxnId, inventoryItemId)
+    );
     CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
   `);
   const kv: KV = {
@@ -28,20 +33,44 @@ export async function openSqliteStore(secrets: KV): Promise<Store> {
     kv,
     async replaceProducts(p: Product[]) { await db.withTransactionAsync(async () => { await db.runAsync('DELETE FROM products'); for (const x of p) await db.runAsync('INSERT INTO products(id,json) VALUES (?,?)', [x.id, JSON.stringify(x)]); }); },
     async listProducts() { return (await db.getAllAsync<{ json: string }>('SELECT json FROM products')).map(r => JSON.parse(r.json) as Product); },
-    async saveBill(b: Bill) { await db.runAsync('INSERT INTO bills(clientTxnId,status,createdAt,synced,json) VALUES (?,?,?,?,?) ON CONFLICT(clientTxnId) DO UPDATE SET status=excluded.status, synced=excluded.synced, json=excluded.json', [b.clientTxnId, b.status, b.createdAt, b.synced ? 1 : 0, JSON.stringify(b)]); },
+    async saveBill(b: Bill) {
+      await db.withTransactionAsync(async () => {
+        await db.runAsync('INSERT INTO bills(clientTxnId,status,createdAt,synced,json) VALUES (?,?,?,?,?) ON CONFLICT(clientTxnId) DO UPDATE SET status=excluded.status, synced=excluded.synced, json=excluded.json', [b.clientTxnId, b.status, b.createdAt, b.synced ? 1 : 0, JSON.stringify(b)]);
+        if (b.synced) await db.runAsync('DELETE FROM local_sale_usage WHERE clientTxnId=?', [b.clientTxnId]);
+      });
+    },
+    async saveBillWithLocalSaleUsage(b: Bill, usage: LocalSaleUsage[]) {
+      await db.withTransactionAsync(async () => {
+        await db.runAsync('INSERT INTO bills(clientTxnId,status,createdAt,synced,json) VALUES (?,?,?,?,?) ON CONFLICT(clientTxnId) DO UPDATE SET status=excluded.status, synced=excluded.synced, json=excluded.json', [b.clientTxnId, b.status, b.createdAt, b.synced ? 1 : 0, JSON.stringify(b)]);
+        if (b.synced) {
+          await db.runAsync('DELETE FROM local_sale_usage WHERE clientTxnId=?', [b.clientTxnId]);
+          return;
+        }
+        try {
+          await db.runAsync('DELETE FROM local_sale_usage WHERE clientTxnId=?', [b.clientTxnId]);
+          for (const row of usage) await db.runAsync('INSERT INTO local_sale_usage(clientTxnId,inventoryItemId,qty) VALUES (?,?,?)', [row.clientTxnId, row.inventoryItemId, row.qty]);
+        } catch (error) {
+          console.warn('Local inventory deduction was skipped; the bill remains saved.', error);
+        }
+      });
+    },
+    async listPendingLocalSaleUsage() {
+      return db.getAllAsync<LocalSaleUsage>(`SELECT s.clientTxnId, s.inventoryItemId, s.qty
+        FROM local_sale_usage s JOIN bills b ON b.clientTxnId=s.clientTxnId
+        WHERE b.status='completed' AND b.synced=0`);
+    },
     async getBill(id: string) { const r = await db.getFirstAsync<{ json: string }>('SELECT json FROM bills WHERE clientTxnId=?', [id]); return r ? (JSON.parse(r.json) as Bill) : null; },
     async deleteBill(id: string) { await db.runAsync('DELETE FROM bills WHERE clientTxnId=?', [id]); },
     async listBills() { return parse(await db.getAllAsync<{ json: string }>('SELECT json FROM bills ORDER BY createdAt DESC')); },
     async unsynced() { return parse(await db.getAllAsync<{ json: string }>("SELECT json FROM bills WHERE synced=0 AND status<>'draft' ORDER BY createdAt ASC")); },
     async nextCounter(name: string) {
-      let n = 0;
-      await db.withExclusiveTransactionAsync(async tx => {
-        await tx.runAsync('INSERT INTO counters(name,value) VALUES (?,0) ON CONFLICT(name) DO NOTHING', [name]);
-        await tx.runAsync('UPDATE counters SET value=value+1 WHERE name=?', [name]);
-        n = (await tx.getFirstAsync<{ value: number }>('SELECT value FROM counters WHERE name=?', [name]))!.value;
-      });
-      return n;
+      const row = await db.getFirstAsync<{ value: number }>(
+        'INSERT INTO counters(name,value) VALUES (?,1) ON CONFLICT(name) DO UPDATE SET value=value+1 RETURNING value',
+        [name],
+      );
+      if (!row) throw new Error(`Could not allocate ${name} counter.`);
+      return row.value;
     },
-    async clearBusinessData() { await db.withTransactionAsync(async () => { await db.runAsync('DELETE FROM bills'); await db.runAsync('DELETE FROM products'); await db.runAsync('DELETE FROM counters'); }); },
+    async clearBusinessData() { await db.withTransactionAsync(async () => { await db.runAsync('DELETE FROM local_sale_usage'); await db.runAsync('DELETE FROM bills'); await db.runAsync('DELETE FROM products'); await db.runAsync('DELETE FROM counters'); }); },
   };
 }

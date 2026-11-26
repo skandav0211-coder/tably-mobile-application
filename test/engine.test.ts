@@ -57,19 +57,27 @@ test('split payments must add up; invalid inputs are rejected before saving', as
   assert.equal((await rig.store.listBills()).length, 1);                    // failed attempts left nothing behind
 });
 
-test('OFFLINE: bills are created and kept without network, then sync when back online (no duplicates, in order)', async () => {
+test('ONLINE-ONLY: startup and new bills require internet; pending local bills survive and sync on the next online startup', async () => {
   const rig = makeEngine(be.base); await rig.eng.init(); await onboard(be, rig, 'Offline Cafe'); await approve(be, rig, 'UTR-O1'); await rig.eng.registerDevice('P1');
+  const saved = await rig.eng.completeBill({ cartId: cart(), lines: [line('A', 10, 1)], discount: 0, serviceChargePercent: 0, method: 'cash' });
+  assert.equal(saved.synced, false);
   rig.net.offline = true;
-  const a = await rig.eng.completeBill({ cartId: cart(), lines: [line('A', 10, 1)], discount: 0, serviceChargePercent: 0, method: 'cash' });
-  const b = await rig.eng.completeBill({ cartId: cart(), lines: [line('B', 20, 2)], discount: 0, serviceChargePercent: 0, method: 'cash' });
-  assert.deepEqual([a.invoiceNo, b.invoiceNo], ['D1-000001', 'D1-000002']);
-  await assert.rejects(rig.eng.syncBills(), /No connection/);
-  assert.equal((await rig.eng.history()).online, false); assert.equal((await rig.eng.history()).bills.length, 2);
-  assert.equal((await rig.eng.report('0000', '9999')).source, 'device');
-  assert.equal(await rig.eng.refreshSession(), null);                        // offline refresh keeps the bounded window
+  await assert.rejects(rig.eng.bootstrap(), /No connection/);
+  await assert.rejects(rig.eng.completeBill({ cartId: cart(), lines: [line('B', 20, 2)], discount: 0, serviceChargePercent: 0, method: 'cash' }), /No connection/);
+  await assert.rejects(rig.eng.refreshSession(), /No connection/);
+  assert.equal((await rig.store.listBills()).length, 1);
+  assert.equal((await rig.store.getBill(saved.clientTxnId))?.synced, false);
   rig.net.offline = false;
-  assert.deepEqual(await rig.eng.syncBills().then(r => [r.accepted, r.rejected]), [2, 0]);
-  assert.equal(be.db.prepare("SELECT COUNT(*) c FROM bills WHERE invoice_no IN ('D1-000001','D1-000002') AND business_id=(SELECT business_id FROM devices WHERE id=?)").get(rig.eng.deviceId).c, 2);
+  assert.equal(await rig.eng.bootstrap(), 'home');
+  assert.equal((await rig.store.getBill(saved.clientTxnId))?.synced, true);
+  assert.equal(be.db.prepare("SELECT COUNT(*) c FROM bills WHERE invoice_no=? AND business_id=(SELECT business_id FROM devices WHERE id=?)").get(saved.invoiceNo, rig.eng.deviceId).c, 1);
+});
+
+test('new bills revalidate subscription status with the server', async () => {
+  const rig = makeEngine(be.base); await rig.eng.init(); await onboard(be, rig, 'Live Entitlement Cafe'); const subId = await approve(be, rig, 'UTR-LIVE1'); await rig.eng.registerDevice('P1');
+  await be.admin('POST', `/subscriptions/${subId}/suspend`, { reason: 'review' });
+  await assert.rejects(rig.eng.completeBill({ cartId: cart(), lines: [line('A', 10, 1)], discount: 0, serviceChargePercent: 0, method: 'cash' }), PaidRequiredError);
+  assert.equal((await rig.store.listBills()).length, 0);
 });
 
 test('bounded offline window and clock-rollback protection', async () => {
@@ -146,9 +154,13 @@ test('tenant isolation on the device: signing in as a different business wipes t
   const shared = { store: undefined as any, secrets: undefined as any };
   const rig = makeEngine(be.base); await rig.eng.init(); await onboard(be, rig, 'Biz A'); await approve(be, rig, 'UTR-T1'); await rig.eng.registerDevice('P1');
   await rig.eng.completeBill({ cartId: cart(), lines: [line('Secret', 1, 1)], discount: 0, serviceChargePercent: 0, method: 'cash' });
+  await rig.store.kv.set('inventoryItems', JSON.stringify([{ id: 'secret-item', name: 'Secret stock' }]));
+  await rig.store.kv.set('inventoryMovementQueue', JSON.stringify([{ inventoryItemId: 'secret-item', clientMoveId: 'secret-move' }]));
   await rig.eng.logout(); assert.equal(rig.eng.token, null); assert.equal((await rig.store.listBills()).length, 1);          // logout keeps local data for the same owner
   await onboard(be, rig, 'Biz B');   // a different account signs in on the same phone
   assert.equal((await rig.store.listBills()).length, 0); assert.equal(rig.eng.invoicePrefix, null); assert.equal(rig.eng.canBill(), false);
+  assert.equal(await rig.store.kv.get('inventoryItems'), null);
+  assert.equal(await rig.store.kv.get('inventoryMovementQueue'), null);
   void shared;
 });
 

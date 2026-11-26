@@ -1,48 +1,104 @@
 import type { Bill } from './types';
 
 export interface ReceiptHeader { name: string; address: string; contact: string; gstin: string | null; footer: string }
-export interface RLine { text: string; align?: 'l' | 'c' | 'r'; bold?: boolean; big?: boolean }
+export interface RLine { text: string; align?: 'l' | 'c' | 'r'; bold?: boolean; big?: boolean; kind?: 'text' | 'rule' | 'columns'; cols?: string[]; size?: 'normal' | 'large' }
+export interface ReceiptOptions { width: 32 | 48; format?: 'thermal' | 'display'; reprint?: boolean }
 const f2 = (v: number) => v.toFixed(2);
 const ascii = (s: string) => s.replace(/₹/g, 'Rs ').replace(/[^\x20-\x7E]/g, '?');
+const wrap = (value: string, width: number) => {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    if (word.length > width) {
+      if (line) { lines.push(line); line = ''; }
+      for (let i = 0; i < word.length; i += width) lines.push(word.slice(i, i + width));
+    } else if (!line) line = word;
+    else if (line.length + word.length + 1 <= width) line += ` ${word}`;
+    else { lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+};
+const fitLeft = (s: string, n: number) => s.slice(0, n).padEnd(n);
+const fitRight = (s: string, n: number) => s.slice(-n).padStart(n);
+const pair = (left: string, right: string, width: number) => {
+  if (left.length + right.length + 1 > width) left = left.slice(0, Math.max(1, width - right.length - 1));
+  return left + ' '.repeat(Math.max(1, width - left.length - right.length)) + right;
+};
 
-function two(l: string, r: string, cols: number): string {
-  if (l.length + r.length + 1 > cols) return l.slice(0, Math.max(cols - r.length - 1, 1)) + ' ' + r;
-  return l + ' '.repeat(cols - l.length - r.length) + r;
+/** Structured receipt source shared by preview, PDF and thermal output. */
+export function buildReceipt(b: Bill, h: ReceiptHeader, options: ReceiptOptions): RLine[] {
+  const width = options.width;
+  const thermal = options.format !== 'display';
+  const cols: [number, number, number, number] = width === 48 ? [20, 4, 9, 12] : [10, 3, 8, 8];
+  const [nameWidth, qtyWidth, rateWidth, amountWidth] = cols;
+  const lineWidth = cols.reduce((sum, value) => sum + value, 0) + 3;
+  const clean = (value: string) => thermal ? ascii(value) : value;
+  const result: RLine[] = [];
+  const add = (text: string, opts: Partial<RLine> = {}) => result.push({ text: clean(text), kind: opts.kind || 'text', ...opts });
+  const centered = (text: string, opts: Partial<RLine> = {}) => wrap(clean(text), width).forEach(line => add(line, { align: 'c', ...opts }));
+  const rule = () => add('-'.repeat(width), { kind: 'rule' });
+  const amount = (value: number) => `${thermal ? 'Rs ' : '₹'}${f2(value)}`;
+  const rightTotal = (label: string, value: string) => add(pair(label, value, width));
+
+  centered(h.name, { bold: true, big: true, size: 'large' });
+  if (h.address) centered(h.address);
+  if (h.contact) centered(`Ph ${h.contact}`);
+  if (h.gstin) centered(`GSTIN ${h.gstin}`);
+  if (b.status === 'refunded') centered('*** REFUND / CREDIT NOTE ***', { bold: true });
+  if (b.status === 'void') centered('*** VOID ***', { bold: true });
+  if (options.reprint) centered('*** COPY / REPRINT ***', { bold: true });
+  rule();
+  const date = new Date(b.createdAt);
+  const dateText = `${String(date.getDate()).padStart(2, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${date.getFullYear()}`;
+  const timeText = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const billLabel = `Bill No : ${b.invoiceNo || 'DRAFT'}`;
+  const dateLabel = `${dateText} ${timeText}`;
+  if (billLabel.length + dateLabel.length + 1 <= width) add(pair(billLabel, dateLabel, width));
+  else { wrap(billLabel, width).forEach(line => add(line)); wrap(dateLabel, width).forEach(line => add(line)); }
+  if (b.cashier) wrap(`Cashier: ${b.cashier}`, width).forEach(line => add(line));
+  if (b.tableNo) wrap(`Table   : ${b.tableNo}`, width).forEach(line => add(line));
+  if (b.customerName || b.customerMobile) wrap(`Customer: ${[b.customerName, b.customerMobile].filter(Boolean).join('  ')}`, width).forEach(line => add(line));
+  rule();
+  const columns = ['Item', 'Qty', 'Rate', 'Amount'];
+  const head = `${fitLeft(columns[0], nameWidth)} ${fitRight(columns[1], qtyWidth)} ${fitRight(columns[2], rateWidth)} ${fitRight(columns[3], amountWidth)}`;
+  add(head, { kind: 'columns', cols: columns });
+  rule();
+  for (const item of b.items) {
+    const nameLines = wrap(clean(item.name), nameWidth);
+    nameLines.forEach((name, index) => {
+      const line = index === 0
+        ? `${fitLeft(name, nameWidth)} ${fitRight(String(item.qty), qtyWidth)} ${fitRight(f2(item.price), rateWidth)} ${fitRight(f2(item.qty * item.price), amountWidth)}`
+        : fitLeft(name, lineWidth);
+      add(line, { kind: 'columns', cols: index === 0 ? [name, String(item.qty), f2(item.price), f2(item.qty * item.price)] : [name] });
+    });
+  }
+  rule();
+  rightTotal('Subtotal', f2(b.subtotal));
+  if (b.discount > 0) rightTotal('Discount', `-${f2(b.discount)}`);
+  if (b.serviceCharge > 0) rightTotal('Service charge', f2(b.serviceCharge));
+  const byRate = new Map<number, number>();
+  for (const item of b.items) if (item.taxRate > 0) byRate.set(item.taxRate, (byRate.get(item.taxRate) || 0) + (item.qty * item.price * item.taxRate) / 100);
+  const rawTax = [...byRate.values()].reduce((sum, value) => sum + value, 0);
+  const taxScale = rawTax > 0 ? b.tax / rawTax : 0;
+  [...byRate.entries()].sort((a, c) => a[0] - c[0]).forEach(([rate, value]) => rightTotal(`Tax @${rate}%`, f2(value * taxScale)));
+  if (b.tax > 0) rightTotal('Tax', f2(b.tax));
+  rule();
+  rightTotal('TOTAL', amount(b.total));
+  result[result.length - 1] = { ...result[result.length - 1], bold: true, big: true, size: 'large' };
+  rule();
+  const qtyTotal = b.items.reduce((sum, item) => sum + item.qty, 0);
+  add(`Items: ${b.items.length}  Qty: ${qtyTotal}`);
+  if (b.payments.length) add(`Paid by: ${b.payments.map(payment => payment.method.toUpperCase()).join(' + ')}`);
+  centered('Thank you! Visit again.');
+  if (h.footer) centered(h.footer);
+  return result;
 }
-function wrap(s: string, cols: number): string[] { const out: string[] = []; for (let i = 0; i < Math.max(s.length, 1); i += cols) out.push(s.slice(i, i + cols)); return out; }
 
-/** One model feeds the on-screen preview, the ESC/POS printer and the tests. */
+/** One model feeds the on-screen preview, ESC/POS output and receipt-PDF tests. */
 export function receiptLines(h: ReceiptHeader, b: Bill, widthMm: 58 | 80, reprint: boolean): RLine[] {
-  const cols = widthMm === 80 ? 48 : 32; const L: RLine[] = []; const rule = '-'.repeat(cols);
-  const add = (text: string, o: Partial<RLine> = {}) => L.push({ text: ascii(text), ...o });
-  wrap(h.name, Math.floor(cols / 2)).forEach(t => add(t, { align: 'c', bold: true, big: true }));
-  if (h.address) wrap(h.address, cols).forEach(t => add(t, { align: 'c' }));
-  if (h.contact) add('Ph: ' + h.contact, { align: 'c' });
-  if (h.gstin) add('GSTIN: ' + h.gstin, { align: 'c' });
-  if (b.status === 'refunded') add('*** REFUND / CREDIT NOTE ***', { align: 'c', bold: true });
-  if (b.status === 'void') add('*** VOID ***', { align: 'c', bold: true });
-  if (reprint) add('*** COPY / REPRINT ***', { align: 'c', bold: true });
-  add(rule);
-  const d = new Date(b.createdAt);
-  const date = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  add(two('Bill: ' + (b.invoiceNo || 'DRAFT'), date, cols)); add(two('Cashier: ' + (b.cashier || '-'), time, cols));
-  if (b.tableNo) add('Table/Order: ' + b.tableNo);
-  if (b.customerName) add('Customer: ' + b.customerName);
-  add(rule); add(two('Item', 'Amount', cols));
-  for (const i of b.items) { wrap(i.name, cols).forEach(t => add(t)); add(two(`  ${i.qty} x ${f2(i.price)}`, f2(i.qty * i.price), cols)); }
-  add(rule); add(two('Subtotal', f2(b.subtotal), cols));
-  if (b.discount > 0) add(two('Discount', '-' + f2(b.discount), cols));
-  // tax breakup by rate (pro-rata after discount, as the server computes it)
-  const byRate = new Map<number, number>(); for (const i of b.items) if (i.taxRate > 0) byRate.set(i.taxRate, (byRate.get(i.taxRate) || 0) + (i.qty * i.price * i.taxRate) / 100);
-  const raw = [...byRate.values()].reduce((a, v) => a + v, 0); const k = raw > 0 ? b.tax / raw : 0;
-  [...byRate.entries()].sort((a, c) => a[0] - c[0]).forEach(([r, t]) => add(two(`Tax @${r}%`, f2(t * k), cols)));
-  if (b.tax > 0) add(two('Total tax', f2(b.tax), cols));
-  if (b.serviceCharge > 0) add(two('Service charge', f2(b.serviceCharge), cols));
-  add(two('TOTAL (Rs)', f2(b.total), cols), { bold: true }); add(rule);
-  b.payments.forEach(p => add(two('Paid: ' + p.method.toUpperCase(), f2(p.amount), cols)));
-  add(''); add(h.footer || 'Thank you! Visit again.', { align: 'c' });
-  return L;
+  return buildReceipt(b, h, { width: widthMm === 80 ? 48 : 32, format: 'thermal', reprint });
 }
 
 /** ESC/POS bytes (CP437/ASCII safe). Width 58 mm = 32 columns, 80 mm = 48 columns. */
@@ -61,20 +117,16 @@ export function testPageLines(widthMm: 58 | 80): RLine[] {
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-/** A4 invoice (Unicode-safe). All user text is HTML-escaped. */
+/** Receipt-width PDF rendered from the same structured lines as preview and printer. */
+export function receiptHtml(h: ReceiptHeader, b: Bill, widthMm: 58 | 80, reprint: boolean): string {
+  const width = widthMm === 80 ? 48 : 32;
+  const lines = buildReceipt(b, h, { width, format: 'display', reprint });
+  const rows = lines.map(line => `<div class="${line.align === 'c' ? 'center' : line.align === 'r' ? 'right' : 'left'}${line.bold ? ' bold' : ''}${line.big ? ' big' : ''}">${esc(line.text || ' ')}</div>`).join('');
+  return `<html><head><meta charset="utf-8"><style>@page{size:${widthMm}mm auto;margin:3mm}body{font-family:monospace;color:#111;margin:0 auto;width:${widthMm - 6}mm;font-size:10pt}.left{text-align:left}.center{text-align:center}.right{text-align:right}.bold{font-weight:700}.big{font-size:14pt;font-weight:700}div{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.35}</style></head><body>${rows}</body></html>`;
+}
+/** Retained export name for callers; PDF invoices now use the shared receipt model. */
 export function invoiceHtml(h: ReceiptHeader, b: Bill, reprint: boolean): string {
-  const rows = b.items.map(i => `<tr><td>${esc(i.name)}</td><td class=r>${i.qty}</td><td class=r>${f2(i.price)}</td><td class=r>${i.taxRate}%</td><td class=r>${f2(i.qty * i.price)}</td></tr>`).join('');
-  const label = b.status === 'refunded' ? 'CREDIT NOTE (REFUND)' : b.status === 'void' ? 'VOID' : 'TAX INVOICE';
-  return `<html><head><meta charset="utf-8"><style>body{font-family:Helvetica,Arial,sans-serif;padding:32px;color:#111}h1{margin:0;font-size:24px}table{width:100%;border-collapse:collapse;margin-top:16px}
-th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left}.r{text-align:right}.tot td{border:0}.big{font-size:18px;font-weight:700}.mut{color:#555}</style></head><body>
-<h1>${esc(h.name)}</h1><div class=mut>${esc(h.address)}<br>${esc(h.contact)}${h.gstin ? '<br>GSTIN: ' + esc(h.gstin) : ''}</div>
-<h2>${label}${reprint ? ' — COPY / REPRINT' : ''}</h2>
-<div>Invoice: <b>${esc(b.invoiceNo || 'DRAFT')}</b> · ${esc(new Date(b.createdAt).toLocaleString())} · Cashier: ${esc(b.cashier || '-')}${b.tableNo ? ' · Table ' + esc(b.tableNo) : ''}${b.customerName ? '<br>Customer: ' + esc(b.customerName) + (b.customerMobile ? ' (' + esc(b.customerMobile) + ')' : '') : ''}</div>
-<table><tr><th>Item</th><th class=r>Qty</th><th class=r>Price</th><th class=r>Tax</th><th class=r>Amount</th></tr>${rows}</table>
-<table class=tot><tr><td></td><td class=r>Subtotal</td><td class=r>${f2(b.subtotal)}</td></tr>${b.discount > 0 ? `<tr><td></td><td class=r>Discount</td><td class=r>-${f2(b.discount)}</td></tr>` : ''}
-${b.tax > 0 ? `<tr><td></td><td class=r>Tax</td><td class=r>${f2(b.tax)}</td></tr>` : ''}${b.serviceCharge > 0 ? `<tr><td></td><td class=r>Service charge</td><td class=r>${f2(b.serviceCharge)}</td></tr>` : ''}
-<tr class=big><td></td><td class=r>Total</td><td class=r>₹${f2(b.total)}</td></tr>${b.payments.map(p => `<tr><td></td><td class=r>Paid (${esc(p.method)})</td><td class=r>${f2(p.amount)}</td></tr>`).join('')}</table>
-<p class=mut>${esc(h.footer || 'Thank you! Visit again.')}</p></body></html>`;
+  return receiptHtml(h, b, 80, reprint);
 }
 export function reportHtml(title: string, r: { billCount: number; total: number; averageBill: number; discounts: number; tax: number; byMethod: Record<string, number>; itemWise: { name: string; qty: number; revenue: number }[] }, source: string): string {
   return `<html><head><meta charset="utf-8"><style>body{font-family:Helvetica,Arial,sans-serif;padding:32px}table{width:100%;border-collapse:collapse}th,td{padding:6px;border-bottom:1px solid #ddd;text-align:left}.r{text-align:right}</style></head><body>

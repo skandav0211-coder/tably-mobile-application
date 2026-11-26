@@ -5,7 +5,7 @@ import { Api } from '../src/core/api';
 import { Engine } from '../src/core/engine';
 import { MemoryKV, MemoryStore } from '../src/core/store';
 
-const backendPath = path.resolve(process.env.TABLY_BACKEND_PATH || '../Tably backend');
+const backendPath = path.resolve(process.env.TABLY_BACKEND_PATH || '../tably-backend');
 const req = createRequire(path.join(backendPath, 'package.json'));
 const { openDb } = req('./src/db'); const { createApp } = req('./src/app');
 const bcrypt = req('bcryptjs');
@@ -14,7 +14,7 @@ export interface Backend { base: string; close(): void; admin(method: string, p:
 export async function startBackend(): Promise<Backend> {
   const db = openDb(':memory:'); const outbox: { text: string; subject: string }[] = [];
   db.prepare('INSERT INTO admins(id,email,password_hash,totp_secret) VALUES (?,?,?,?)').run('ADM-T', 'o@x.com', bcrypt.hashSync('correct horse battery', 4), '');
-  const app = createApp(db, { noRateLimit: true, mailer: { send: async (m: { text: string; subject: string }) => { outbox.push(m); } } });
+  const app = createApp(db, { noRateLimit: true, mailer: { sendMail: async (m: { text: string; subject: string }) => { outbox.push(m); } } });
   const server: any = await new Promise(r => { const s = app.listen(0, () => r(s)); });
   const base = 'http://127.0.0.1:' + server.address().port;
   const s1 = await (await fetch(base + '/admin-api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'o@x.com', password: 'correct horse battery' }) })).json();

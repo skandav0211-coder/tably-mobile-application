@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp, Tab } from '../AppContext';
 import { Banner, Brand, Btn, Card, Chip, Divider, Empty, F, Header, H1, H2, Input, Mark, Pill, Row, Screen, Toggle, Txt, useLayout, useTheme } from '../ui/kit';
+import { useThemeMode } from '../ui/theme';
 import { NewBill } from './Billing';
 import { Menu, Reports, Sales } from './Manage';
 import { DeviceList } from './Device';
@@ -40,11 +41,11 @@ export function Home() {
     </View>);
   if (L.rail) return (
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: t.bg }}>
-      <View style={{ width: 92, backgroundColor: t.side, alignItems: 'center', paddingTop: ins.top + 16, gap: 6 }}>
+      <ScrollView style={{ width: 92, backgroundColor: t.side }} contentContainerStyle={{ alignItems: 'center', paddingTop: ins.top + 16, paddingBottom: Math.max(ins.bottom, 12), gap: 6 }} showsVerticalScrollIndicator={false}>
         <Mark size={44} /><View style={{ height: 14 }} />
         {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ width: 76, paddingVertical: 10, borderRadius: 16, alignItems: 'center', gap: 3, backgroundColor: tab === x.k ? 'rgba(217,115,28,0.22)' : 'transparent' }} accessibilityRole="tab" accessibilityState={{ selected: tab === x.k }}>
           <Ionicons name={x.icon} size={24} color={tab === x.k ? '#F59A4A' : '#CDBFB5'} /><Txt small style={{ color: tab === x.k ? '#F59A4A' : '#CDBFB5', fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
-      </View>
+      </ScrollView>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>{body}</SafeAreaView>
     </View>);
   return (
@@ -56,6 +57,21 @@ export function Home() {
           <Txt small style={{ color: tab === x.k ? t.pri : t.mut, fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
       </View>
     </View>);
+}
+
+export function OfflineRequired() {
+  const { refreshAll, startupError, connecting } = useApp(); const t = useTheme();
+  return (
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: t.bg }}>
+      <Screen max={560}>
+        <Mark size={52} />
+        <H1>Unable to verify Tably</H1>
+        <Txt>Tably must reach the server to validate your subscription and sync this device's pending bills before opening. Check your connection, then try again.</Txt>
+        {startupError ? <Banner tone="warn">{startupError}</Banner> : null}
+        <Btn title="Try again" onPress={() => void refreshAll()} loading={connecting} />
+      </Screen>
+    </SafeAreaView>
+  );
 }
 
 // ───────────────────────── Registered, not yet subscribed ─────────────────────────
@@ -99,15 +115,67 @@ export function MenuRow({ icon, label, value, onPress, danger, badge }: { icon: 
 
 // ───────────────────────── More ─────────────────────────
 export function More() {
-  const { me, push, signOut, syncNow, unsynced, mpinOn, versionName, canBill, eng } = useApp(); const [unread, setUnread] = useState(0);
+  const { me, push, signOut, syncNow, unsynced, mpinOn, versionName, canBill, eng, toast } = useApp(); const [unread, setUnread] = useState(0);
+  const { mode, setMode } = useThemeMode();
+  const t = useTheme();
+  const [changingTheme, setChangingTheme] = useState(false);
   useEffect(() => { eng.notifications().then(n => setUnread(n.filter(x => !x.read).length)).catch(() => null); }, [eng]);
+  async function toggleTheme() {
+    const nextMode = mode === 'dark' ? 'light' : 'dark';
+    setChangingTheme(true);
+    try {
+      await setMode(nextMode);
+      toast(`Switched to ${nextMode} mode`, 'ok');
+    } catch (error) {
+      console.error('Unable to save appearance preference:', error);
+    } finally {
+      setChangingTheme(false);
+    }
+  }
   const s = me?.subscription;
   return (
     <View style={{ flex: 1 }}><Header title="More" />
       <Screen max={640}>
         <Card><Row style={{ justifyContent: 'space-between' }}><View style={{ flex: 1 }}><H2>{me?.business?.name || 'Business'}</H2><Txt small mut>{me?.user.phone || ''}</Txt><Txt small mut>{me?.user.email || ''}</Txt></View>{s ? <Pill text={STATUS_LABEL[s.status] || s.status} tone={canBill ? 'ok' : 'bad'} /> : null}</Row></Card>
         <Card>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Row style={{ flex: 1 }}>
+              <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: t.priSoft }}>
+                <Ionicons name={mode === 'dark' ? 'moon' : 'sunny'} size={21} color={t.pri} />
+              </View>
+              <View style={{ flex: 1, gap: 3 }}>
+                <H2>Appearance</H2>
+                <Txt small mut>{mode === 'dark' ? 'Dark mode is on' : 'Light mode is on'}</Txt>
+              </View>
+            </Row>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}
+              accessibilityHint="Changes the app appearance and saves your choice on this device."
+              disabled={changingTheme}
+              onPress={() => void toggleTheme()}
+              style={({ pressed }) => ({
+                minHeight: 42,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 7,
+                paddingHorizontal: 12,
+                borderRadius: 13,
+                borderWidth: 1,
+                borderColor: t.line,
+                backgroundColor: t.card,
+                opacity: changingTheme ? 0.55 : pressed ? 0.72 : 1,
+              })}
+            >
+              <Ionicons name={mode === 'dark' ? 'sunny-outline' : 'moon-outline'} size={17} color={t.pri} />
+              <Txt small bold style={{ color: t.pri }}>{mode === 'dark' ? 'Light' : 'Dark'}</Txt>
+            </Pressable>
+          </Row>
+        </Card>
+        <Card>
           <MenuRow icon="card-outline" label="Subscription" value={s?.daysLeft != null ? `${s.daysLeft} days left` : undefined} onPress={() => push('subscription')} />
+          {me?.features?.inventory ? <><Divider /><MenuRow icon="cube-outline" label="Inventory" onPress={() => push('inventory')} /></> : null}
           <Divider /><MenuRow icon="business-outline" label="Business profile & tax" onPress={() => push('business')} />
           <Divider /><MenuRow icon="print-outline" label="Printer" onPress={() => push('printer')} />
           <Divider /><MenuRow icon="phone-portrait-outline" label="Devices" value={me ? `${me.deviceSlots.used}/${me.deviceSlots.max}` : undefined} onPress={() => push('devices')} />

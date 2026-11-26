@@ -1,6 +1,6 @@
 import type { Engine } from '../core/engine';
 import type { Bill } from '../core/types';
-import { invoiceHtml, receiptLines, toEscPos, ReceiptHeader } from '../core/receipt';
+import { receiptHtml, receiptLines, toEscPos, ReceiptHeader } from '../core/receipt';
 import { printBytes } from './printer';
 import { sharePdf } from './share';
 
@@ -16,4 +16,4 @@ export async function printBill(eng: Engine, bill: Bill, reprint = false): Promi
     await eng.markPrinted(bill); return { ok: true, message: 'Sent to the printer.' };
   } catch (e: any) { return { ok: false, message: `${e.message} The bill is saved — retry, or share it as a PDF.` }; }
 }
-export const pdfBill = (eng: Engine, bill: Bill) => sharePdf(invoiceHtml(headerOf(eng), bill, bill.printCount > 0), bill.invoiceNo || 'invoice');
+export const pdfBill = (eng: Engine, bill: Bill, widthMm: 58 | 80 = 80) => sharePdf(receiptHtml(headerOf(eng), bill, widthMm, bill.printCount > 0), bill.invoiceNo || 'receipt');

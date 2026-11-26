@@ -69,16 +69,15 @@ export function Menu() {
       toast(error instanceof Error ? error.message : String(error), 'bad');
     }
   }
-  function moveOption(index: number, direction: -1 | 1) {
-    setVars(current => {
-      const siblings = current.map((option, optionIndex) => option.kind === 'variant' ? optionIndex : -1).filter(optionIndex => optionIndex >= 0);
-      const position = siblings.indexOf(index);
-      const other = siblings[position + direction];
-      if (position < 0 || other == null) return current;
-      const next = [...current];
-      [next[index], next[other]] = [next[other], next[index]];
-      return next;
-    });
+  async function deleteItem(product: Product) {
+    try {
+      await eng.deleteProduct(product.id);
+      setEdit(null);
+      toast('Menu item permanently deleted.', 'ok');
+      load();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), 'bad');
+    }
   }
   async function pickMenuFile() {
     setImportBusy(true);
@@ -149,7 +148,11 @@ export function Menu() {
         {!canBill ? <Banner tone="warn">Menu changes need an active subscription.</Banner> : null}
         {shown.length === 0 ? <Empty text={archived?'Nothing archived. Items you archive will appear here.':items.length?'No items match.':'Your menu is empty. Tap “Add item” to start.'} /> : shown.map(p => (
           <Card key={p.id} onPress={() => archived ? toast('Use Restore to put this item back on the menu.','info') : open(p)}>
-            <Row style={{ justifyContent: 'space-between' }}><View style={{ flex: 1 }}><Txt bold>{p.favourite ? '★ ' : ''}{p.name}</Txt><Txt small mut>{p.category || 'Uncategorised'}{p.taxRate ? ` · ${p.taxRate}% tax` : ''}{p.variants.length ? ` · ${p.variants.length} option(s)` : ''}</Txt></View><Txt bold tone="ok">{inr(p.price)}</Txt>{p.active && canBill ? <Pressable accessibilityRole="button" accessibilityLabel={`More actions for ${p.name}`} hitSlop={8} onPress={() => Alert.alert(p.name, undefined, [{ text: 'Edit', onPress: () => open(p) }, { text: 'Archive', style: 'destructive', onPress: () => Alert.alert('Archive item?', `Archive ${p.name}? It disappears from new bills. Past bills and reports keep it. You can restore it any time.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Archive', style: 'destructive', onPress: () => void (async () => { try { await eng.archiveProduct(p.id); toast('Item archived', 'ok'); load(); } catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); } })() }]) }, { text: 'Cancel', style: 'cancel' }])}><Ionicons name="ellipsis-vertical" size={20} color={t.mut} /></Pressable> : null}</Row>
+            <Row style={{ justifyContent: 'space-between' }}><View style={{ flex: 1 }}><Txt bold>{p.favourite ? '★ ' : ''}{p.name}</Txt><Txt small mut>{p.category || 'Uncategorised'}{p.taxRate ? ` · ${p.taxRate}% tax` : ''}{p.variants.length ? ` · ${p.variants.length} option(s)` : ''}</Txt></View><Txt bold tone="ok">{inr(p.price)}</Txt>{canBill ? <Pressable accessibilityRole="button" accessibilityLabel={`More actions for ${p.name}`} hitSlop={8} onPress={() => Alert.alert(p.name, undefined, [
+              ...(!archived ? [{ text: 'Edit', onPress: () => open(p) }, { text: 'Archive', style: 'destructive' as const, onPress: () => Alert.alert('Archive item?', `Archive ${p.name}? It disappears from new bills. Past bills and reports keep it. You can restore it any time.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Archive', style: 'destructive', onPress: () => void (async () => { try { await eng.archiveProduct(p.id); toast('Item archived', 'ok'); load(); } catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); } })() }]) }] : []),
+              { text: 'Delete permanently', style: 'destructive', onPress: () => Alert.alert('Delete menu item?', `Permanently delete ${p.name}? Items with bill, recipe, or stock history cannot be deleted; archive those instead.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void deleteItem(p) }]) },
+              { text: 'Cancel', style: 'cancel' },
+            ])}><Ionicons name="ellipsis-vertical" size={20} color={t.mut} /></Pressable> : null}</Row>
             <Row style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
               {!p.active ? <><Pill text="Archived" tone="bad" /><Btn small kind="ok" title="Restore" disabled={!canBill} onPress={async()=>{try{await eng.restoreProduct(p.id);toast('Item restored','ok');load()}catch(e:any){toast(e.message,'bad')}}} /></> : null}
               {p.active ? <Row style={{ gap: 6 }}>
@@ -170,14 +173,13 @@ export function Menu() {
         <Row><View style={{ flex: 1 }}><Input label="Price ₹ *" keyboardType="decimal-pad" value={f.price} onChangeText={v => setF({ ...f, price: v })} /></View><View style={{ flex: 1 }}><Input label="Tax %" keyboardType="decimal-pad" value={f.taxRate} onChangeText={v => setF({ ...f, taxRate: v })} /></View></Row>
         <Input label="SKU / code" autoCapitalize="characters" value={f.sku} onChangeText={v => setF({ ...f, sku: v })} />
         <Toggle label="Available" value={f.available} onChange={v => setF({ ...f, available: v })} /><Toggle label="Favourite (shown first)" value={f.favourite} onChange={v => setF({ ...f, favourite: v })} />
-        {edit !== 'new' ? <><Toggle label="Active (off = archived)" value={f.active} onChange={v => setF({ ...f, active: v })} />{canBill ? <Btn kind="bad" small title="Archive item" onPress={()=>{const product=edit as Product;Alert.alert('Archive item?',`Archive ${product.name}? It disappears from new bills. Past bills and reports keep it. You can restore it any time.`,[{text:'Cancel',style:'cancel'},{text:'Archive',style:'destructive',onPress:()=>void (async()=>{try{await eng.archiveProduct(product.id);setEdit(null);toast('Item archived','ok');load()}catch(e:any){toast(e.message,'bad')}})()}])}} /> : null}</> : null}
+        {edit !== 'new' ? <><Toggle label="Active (off = archived)" value={f.active} onChange={v => setF({ ...f, active: v })} />{canBill ? <><Btn kind="bad" small title="Archive item" onPress={()=>{const product=edit as Product;Alert.alert('Archive item?',`Archive ${product.name}? It disappears from new bills. Past bills and reports keep it. You can restore it any time.`,[{text:'Cancel',style:'cancel'},{text:'Archive',style:'destructive',onPress:()=>void (async()=>{try{await eng.archiveProduct(product.id);setEdit(null);toast('Item archived','ok');load()}catch(e:any){toast(e.message,'bad')}})()}])}} /><Btn kind="bad" small title="Delete permanently" onPress={() => Alert.alert('Delete menu item?', `Permanently delete ${(edit as Product).name}? Items with bill, recipe, or stock history cannot be deleted; archive those instead.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void deleteItem(edit as Product) }])} /></> : null}</> : null}
         <H2>Sizes &amp; add-ons</H2>
         {vars.map((v, i) => (
-          <Row key={i} style={{ alignItems: 'flex-end' }}>
-            <View style={{ flex: 2 }}><Input label={v.kind === 'variant' ? 'Size / variant' : 'Add-on'} value={v.name} onChangeText={x => setVars(a => a.map((y, j) => (j === i ? { ...y, name: x } : y)))} /></View>
-            <View style={{ flex: 1 }}><Input label="± ₹" keyboardType="numbers-and-punctuation" value={String(v.priceDelta)} onChangeText={x => setVars(a => a.map((y, j) => (j === i ? { ...y, priceDelta: x as any } : y)))} /></View>
+          <Row key={i} style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <View style={{ flex: 2, minWidth: 140 }}><Input label={v.kind === 'variant' ? 'Size / variant' : 'Add-on'} value={v.name} onChangeText={x => setVars(a => a.map((y, j) => (j === i ? { ...y, name: x } : y)))} /></View>
+            <View style={{ flex: 1, minWidth: 100 }}><Input label="± ₹" keyboardType="numbers-and-punctuation" value={String(v.priceDelta)} onChangeText={x => setVars(a => a.map((y, j) => (j === i ? { ...y, priceDelta: x as any } : y)))} /></View>
             <Pressable onPress={() => setVars(a => a.filter((_, j) => j !== i))} hitSlop={10} style={{ paddingBottom: 14 }}><Ionicons name="trash-outline" size={22} color={t.bad} /></Pressable>
-            {v.kind === 'variant' ? <View style={{ paddingBottom: 14, gap: 8 }}><Pressable accessibilityLabel={`Move ${v.name || 'size'} up`} disabled={!vars.slice(0, i).some(option => option.kind === 'variant')} onPress={() => moveOption(i, -1)}><Ionicons name="arrow-up" size={20} color={t.pri} /></Pressable><Pressable accessibilityLabel={`Move ${v.name || 'size'} down`} disabled={!vars.slice(i + 1).some(option => option.kind === 'variant')} onPress={() => moveOption(i, 1)}><Ionicons name="arrow-down" size={20} color={t.pri} /></Pressable></View> : null}
           </Row>))}
         <Row><View style={{ flex: 1 }}><Btn small kind="sec" title="+ Size" onPress={() => setVars(a => [...a, { name: '', priceDelta: 0, kind: 'variant' }])} disabled={vars.length >= 30} /></View><View style={{ flex: 1 }}><Btn small kind="sec" title="+ Add-on" onPress={() => setVars(a => [...a, { name: '', priceDelta: 0, kind: 'addon' }])} disabled={vars.length >= 30} /></View></Row>
         {edit !== 'new' ? <Btn kind="sec" title="Ingredients used per serving" onPress={() => void editRecipe(edit as Product)} disabled={!canBill} /> : null}
@@ -277,4 +279,17 @@ export function Reports() {
       </Screen>
     </View>
   );
+}
+
+export function SalesReports() {
+  const [section, setSection] = useState<'sales' | 'reports'>('sales');
+  return <View style={{ flex: 1 }}>
+    <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+      <Row>
+        <View style={{ flex: 1 }}><Btn small kind={section === 'sales' ? 'pri' : 'sec'} title="Sales" onPress={() => setSection('sales')} /></View>
+        <View style={{ flex: 1 }}><Btn small kind={section === 'reports' ? 'pri' : 'sec'} title="Reports" onPress={() => setSection('reports')} /></View>
+      </Row>
+    </View>
+    <View style={{ flex: 1 }}>{section === 'sales' ? <Sales /> : <Reports />}</View>
+  </View>;
 }

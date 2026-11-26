@@ -6,7 +6,8 @@ import { useApp, Tab } from '../AppContext';
 import { Banner, Brand, Btn, Card, Chip, Divider, Empty, F, Header, H1, H2, Input, Mark, Pill, Row, Screen, Toggle, Txt, useLayout, useTheme } from '../ui/kit';
 import { useThemeMode } from '../ui/theme';
 import { NewBill } from './Billing';
-import { Menu, Reports, Sales } from './Manage';
+import { Menu, SalesReports } from './Manage';
+import { InventoryScreen } from './Inventory';
 import { DeviceList } from './Device';
 import { STATUS_LABEL } from './Onboarding';
 import { pairedBluetoothPrinters, printBytes } from '../print/printer';
@@ -14,8 +15,9 @@ import { testPageLines, toEscPos } from '../core/receipt';
 import type { PrinterConfig } from '../core/types';
 
 const TABS: { k: Tab; label: string; icon: any }[] = [
-  { k: 'bill', label: 'Bill', icon: 'cart-outline' }, { k: 'menu', label: 'Menu', icon: 'restaurant-outline' }, { k: 'sales', label: 'Sales', icon: 'receipt-outline' },
-  { k: 'reports', label: 'Reports', icon: 'bar-chart-outline' }, { k: 'more', label: 'More', icon: 'menu-outline' }];
+  { k: 'bill', label: 'Bill', icon: 'cart-outline' }, { k: 'menu', label: 'Menu', icon: 'restaurant-outline' },
+  { k: 'sales-reports', label: 'Sales & Reports', icon: 'bar-chart-outline' }, { k: 'inventory', label: 'Inventory', icon: 'cube-outline' },
+  { k: 'more', label: 'More', icon: 'menu-outline' }];
 
 /** Notice strip shown above every tab: paused billing and the one-time MPIN suggestion. */
 function Notices() {
@@ -37,14 +39,14 @@ export function Home() {
   const body = (
     <View style={{ flex: 1 }}>
       <Notices />
-      <View style={{ flex: 1 }}>{tab === 'bill' ? <NewBill /> : tab === 'menu' ? <Menu /> : tab === 'sales' ? <Sales /> : tab === 'reports' ? <Reports /> : <More />}</View>
+      <View style={{ flex: 1 }}>{tab === 'bill' ? <NewBill /> : tab === 'menu' ? <Menu /> : tab === 'sales-reports' ? <SalesReports /> : tab === 'inventory' ? <InventoryScreen embedded /> : <More />}</View>
     </View>);
   if (L.rail) return (
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: t.bg }}>
       <ScrollView style={{ width: 92, backgroundColor: t.side }} contentContainerStyle={{ alignItems: 'center', paddingTop: ins.top + 16, paddingBottom: Math.max(ins.bottom, 12), gap: 6 }} showsVerticalScrollIndicator={false}>
         <Mark size={44} /><View style={{ height: 14 }} />
-        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ width: 76, paddingVertical: 10, borderRadius: 16, alignItems: 'center', gap: 3, backgroundColor: tab === x.k ? 'rgba(217,115,28,0.22)' : 'transparent' }} accessibilityRole="tab" accessibilityState={{ selected: tab === x.k }}>
-          <Ionicons name={x.icon} size={24} color={tab === x.k ? '#F59A4A' : '#CDBFB5'} /><Txt small style={{ color: tab === x.k ? '#F59A4A' : '#CDBFB5', fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
+        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ width: 76, minHeight: 58, paddingVertical: 8, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: tab === x.k ? 'rgba(217,115,28,0.22)' : 'transparent' }} accessibilityRole="tab" accessibilityLabel={x.label} accessibilityState={{ selected: tab === x.k }}>
+          <Ionicons name={x.icon} size={24} color={tab === x.k ? '#F59A4A' : '#CDBFBF'} /><Txt small numberOfLines={2} style={{ maxWidth: 72, textAlign: 'center', fontSize: 11, lineHeight: 13, color: tab === x.k ? '#F59A4A' : '#CDBFB5', fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
       </ScrollView>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>{body}</SafeAreaView>
     </View>);
@@ -52,9 +54,9 @@ export function Home() {
     <View style={{ flex: 1, backgroundColor: t.bg }}>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>{body}</SafeAreaView>
       <View style={{ flexDirection: 'row', backgroundColor: t.card, borderTopWidth: 1, borderTopColor: t.line, paddingBottom: Math.max(ins.bottom, 6), paddingTop: 6 }}>
-        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ flex: 1, alignItems: 'center', gap: 2, paddingVertical: 4 }} accessibilityRole="tab" accessibilityState={{ selected: tab === x.k }}>
+        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 2, paddingVertical: 4 }} accessibilityRole="tab" accessibilityLabel={x.label} accessibilityState={{ selected: tab === x.k }}>
           <View style={{ paddingHorizontal: 16, paddingVertical: 3, borderRadius: 14, backgroundColor: tab === x.k ? t.priSoft : 'transparent' }}><Ionicons name={x.icon} size={22} color={tab === x.k ? t.pri : t.mut} /></View>
-          <Txt small style={{ color: tab === x.k ? t.pri : t.mut, fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
+          <Txt small numberOfLines={2} style={{ maxWidth: '100%', textAlign: 'center', fontSize: 10, lineHeight: 12, color: tab === x.k ? t.pri : t.mut, fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
       </View>
     </View>);
 }

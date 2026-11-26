@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, Share, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../AppContext';
 import { computeReorder, displayInventoryQuantity, parseInventoryQuantity } from '../core/inventory';
 import type { InventoryItem, InventoryItemInput, InventoryMovementInput, InventoryOrder, InventorySettings, InventoryUsage, InventoryUnit, RecipeLine, Product } from '../core/types';
+import { parseInventoryCsv, type InventoryImportCandidate, type InventoryImportPreview } from '../core/inventoryImport';
 import { Banner, Btn, Card, Chip, Divider, Empty, F, Header, H2, Input, Pill, Row, Screen, Sheet, Txt, useLayout, useTheme } from '../ui/kit';
 import { inr } from '../core/calc';
 import { shareCsv } from '../print/share';
@@ -37,13 +40,13 @@ const quantityIn = (value: string, label: string, unit: InventoryUnit) => {
   if (parsed == null || parsed > 1e9) throw new Error(`${label} must be a valid quantity in ${unit === 'g' ? 'g or kg' : unit === 'ml' ? 'ml or l' : 'pc or dozen'}.`);
   return parsed;
 };
-
+const inventoryCsvTemplate = 'name,unit,category,pack_size,pack_label,reorder_level,par_level,unit_cost,supplier,notes,opening_qty\nCoffee beans,g,Ingredients,1000,bag,250,1000,0.02,ABC Foods,Arabica beans,5000';
 function ActionIcon({ name, label, onPress }: { name: React.ComponentProps<typeof Ionicons>['name']; label: string; onPress: () => void }) {
   const t = useTheme();
   return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={8} style={{ minWidth: 42, minHeight: 42, alignItems: 'center', justifyContent: 'center' }}><Ionicons name={name} size={22} color={t.pri} /></Pressable>;
 }
 
-export function InventoryScreen() {
+export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
   const { eng, back, toast, canBill, me, uuid } = useApp();
   const t = useTheme();
   const L = useLayout();
@@ -59,6 +62,8 @@ export function InventoryScreen() {
   const [form, setForm] = useState<DraftItem>(emptyDraft);
   const [itemSheet, setItemSheet] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
+  const [inventoryImport, setInventoryImport] = useState<InventoryImportPreview | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [movement, setMovement] = useState<InventoryMovementInput['type'] | null>(null);
   const [moveQty, setMoveQty] = useState('');
   const [moveReason, setMoveReason] = useState('');
@@ -146,6 +151,50 @@ export function InventoryScreen() {
       setItemSheet(false); toast(editItem ? 'Inventory item updated.' : 'Inventory item added.', 'ok');
       setSelected(saved);
     } catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
+  }
+  async function pickInventoryCsv() {
+    setImportBusy(true);
+    try {
+      const selected = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'application/vnd.ms-excel'],
+        copyToCacheDirectory: true,
+      });
+      if (selected.canceled) return;
+      const file = selected.assets[0];
+      if (!file.name.toLowerCase().endsWith('.csv')) throw new Error('Choose a .csv file. Use the template for the supported columns.');
+      const text = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.UTF8 });
+      setInventoryImport(parseInventoryCsv(text, await eng.inventoryItems(true)));
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), 'bad');
+    } finally { setImportBusy(false); }
+  }
+  async function shareInventoryTemplate() {
+    try { await shareCsv(inventoryCsvTemplate, 'tably-inventory-template.csv'); }
+    catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
+  }
+  async function applyInventoryImport() {
+    if (!inventoryImport?.candidates.length) return;
+    setImportBusy(true);
+    const failed: InventoryImportCandidate[] = [];
+    const errors = [...inventoryImport.errors];
+    let imported = 0;
+    try {
+      for (const candidate of inventoryImport.candidates) {
+        try {
+          await eng.saveInventoryItem(null, candidate.item, candidate.openingQty);
+          imported++;
+        } catch (error) {
+          failed.push(candidate);
+          errors.push(`Row ${candidate.row} (${candidate.item.name}): ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      await loadItems();
+      const skipped = inventoryImport.duplicates;
+      toast(`${imported} inventory item(s) imported${skipped ? ` · ${skipped} duplicate(s) skipped` : ''}${failed.length ? ` · ${failed.length} failed` : ''}`, failed.length ? 'warn' : 'ok');
+      setInventoryImport(failed.length || errors.length ? { ...inventoryImport, candidates: failed, errors } : null);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), 'bad');
+    } finally { setImportBusy(false); }
   }
   function openMovement(type: InventoryMovementInput['type']) {
     setMovement(type); setMoveQty(''); setMoveReason(type === 'purchase' ? 'Delivery' : ''); setMoveNote(''); setMoveCost('');
@@ -428,11 +477,15 @@ export function InventoryScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
-      <Header title="Inventory" onBack={back} right={rightActions} />
+      <Header title="Inventory" onBack={embedded ? undefined : back} right={rightActions} />
       <Screen max={L.twoPane ? 960 : 700}>
         {offline ? <Banner tone="warn">A movement is queued on this device. It will be replayed with the same ID when the connection returns.</Banner> : null}
         {queuedMoves ? <Banner tone="warn">{queuedMoves} movement(s) waiting to sync.</Banner> : null}
         {!canBill ? <Banner tone="warn">Inventory changes require an active subscription. Reading cached inventory remains available.</Banner> : null}
+        <Row>
+          <View style={{ flex: 1 }}><Btn kind="sec" small title="Import CSV" onPress={() => canBill ? void pickInventoryCsv() : toast('An active subscription is required to import inventory.', 'warn')} loading={importBusy} disabled={!canBill} /></View>
+          <View style={{ flex: 1 }}><Btn kind="sec" small title="CSV template" onPress={() => void shareInventoryTemplate()} /></View>
+        </Row>
         <Row style={{ flexWrap: 'wrap' }}>{([
           ['all', 'All'], ['low', `Low${lowCount ? ` · ${items.filter(item => item.active && item.status === 'low').length}` : ''}`],
           ['out', `Out${items.some(item => item.active && item.status === 'out') ? ` · ${items.filter(item => item.active && item.status === 'out').length}` : ''}`], ['archived', 'Archived'],
@@ -458,6 +511,17 @@ export function InventoryScreen() {
         <Input label="Notes (optional)" value={form.notes} onChangeText={notes => setForm(old => ({ ...old, notes }))} multiline />
         {!editItem ? <Input label={`Opening stock (${form.unit}${form.unit === 'g' ? ' / kg' : form.unit === 'ml' ? ' / l' : ' / dozen'})`} value={form.openingQty} onChangeText={openingQty => setForm(old => ({ ...old, openingQty }))} keyboardType="decimal-pad" /> : null}
         <Btn title={editItem ? 'Save changes' : 'Add item'} onPress={() => void saveItem()} disabled={!canBill} />
+      </Sheet>
+      <Sheet visible={!!inventoryImport} onClose={() => setInventoryImport(null)} title="Import inventory CSV">
+        <Txt small mut>Required columns: name, unit (g, ml, or pc). Optional: category, pack_size, pack_label, reorder_level, par_level, unit_cost, supplier, notes, opening_qty. Same-name items are skipped as duplicates.</Txt>
+        {inventoryImport ? <>
+          <Card><Txt bold>{inventoryImport.candidates.length} item(s) ready to import</Txt><Txt small mut>{inventoryImport.duplicates} duplicate(s) skipped</Txt></Card>
+          {inventoryImport.candidates.slice(0, 12).map(candidate => <Row key={`${candidate.row}-${candidate.item.name}`} style={{ justifyContent: 'space-between' }}><Txt style={{ flex: 1 }} numberOfLines={1}>{candidate.item.name}</Txt><Txt small mut>{candidate.item.unit} · opening {displayInventoryQuantity(candidate.openingQty, candidate.item.unit)}</Txt></Row>)}
+          {inventoryImport.candidates.length > 12 ? <Txt small mut>And {inventoryImport.candidates.length - 12} more…</Txt> : null}
+          {inventoryImport.errors.length ? <Card><Txt bold tone="warn">{inventoryImport.errors.length} issue(s)</Txt>{inventoryImport.errors.slice(0, 8).map((error, index) => <Txt small key={`${index}-${error}`} tone="warn">{error}</Txt>)}{inventoryImport.errors.length > 8 ? <Txt small mut>And {inventoryImport.errors.length - 8} more…</Txt> : null}</Card> : null}
+          <Btn title={`Import ${inventoryImport.candidates.length} item(s)`} onPress={() => void applyInventoryImport()} loading={importBusy} disabled={!inventoryImport.candidates.length || !canBill} />
+        </> : null}
+        <Btn title="Share CSV template" kind="sec" onPress={() => void shareInventoryTemplate()} />
       </Sheet>
     </View>
   );

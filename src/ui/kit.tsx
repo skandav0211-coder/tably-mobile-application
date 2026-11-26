@@ -9,7 +9,14 @@ const dark: typeof light = { bg: '#1B1614', card: '#262020', ink: '#F4EDE6', mut
 export const F = { body: 'Nunito_400Regular', bold: 'Nunito_700Bold', heavy: 'Nunito_800ExtraBold', head: 'Fredoka_600SemiBold' };
 export function useLayout() {
   const { width, height } = useWindowDimensions();
-  return { width, height, rail: width >= 720, twoPane: width >= 840, landscape: width > height, pad: width >= 720 ? 24 : 16 };
+  const landscape = width > height;
+  const rail = width >= 720 || (landscape && width >= 560);
+  return {
+    width, height, rail,
+    twoPane: width >= 960 || (landscape && width >= 800),
+    cartWidth: Math.min(420, Math.max(300, width * 0.38)),
+    landscape, pad: width >= 720 ? 24 : 16,
+  };
 }
 export const tileColors = ['#E07B1F', '#7A4A2B', '#B5651D', '#C0392B', '#8E6C4A', '#D4A017', '#A0522D'];
 export const colorFor = (s: string) => tileColors[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % tileColors.length];

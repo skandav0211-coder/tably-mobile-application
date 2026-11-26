@@ -80,6 +80,7 @@ export class Api {
   products = (includeArchived=false) => this.req<any[]>('GET', '/api/products' + (includeArchived?'?includeArchived=1':''));
   addProduct = (p: Record<string, unknown>) => this.req<any>('POST', '/api/products', p);
   updateProduct = (id: string, p: Record<string, unknown>) => this.req<any>('PUT', '/api/products/' + encodeURIComponent(id), p);
+  deleteProduct = (id: string) => this.req<{ ok: boolean }>('DELETE', '/api/products/' + encodeURIComponent(id));
   archiveProduct = (id: string) => this.req<any>('POST', '/api/products/' + encodeURIComponent(id) + '/archive', {});
   restoreProduct = (id: string) => this.req<any>('POST', '/api/products/' + encodeURIComponent(id) + '/restore', {});
   inventoryItems = (includeArchived = false, outlet?: string) => this.req<{ items: InventoryItem[] }>('GET', '/api/inventory/items?' + new URLSearchParams({ ...(includeArchived ? { includeArchived: '1' } : {}), ...(outlet ? { outlet } : {}) }).toString());

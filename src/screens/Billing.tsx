@@ -190,7 +190,7 @@ export function NewBill() {
     </View>
   );
 
-  const avail = L.width - (L.rail ? 88 : 0) - (L.twoPane ? 420 : 0); const cols = Math.max(2, Math.floor(avail / 165));
+  const avail = L.width - (L.rail ? 88 : 0) - (L.twoPane ? L.cartWidth : 0); const cols = Math.max(2, Math.floor(avail / 165));
   return (
     <View style={{ flex: 1 }}>
       <Header title="New bill" right={<Pressable onPress={() => push('drafts')} hitSlop={10} style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}><Ionicons name="document-text-outline" size={20} color={t.pri} /><Txt tone="ok" bold>Drafts</Txt></Pressable>} />
@@ -204,7 +204,7 @@ export function NewBill() {
             ListEmptyComponent={<Empty text={products.length ? 'No items match.' : 'Your menu is empty. Add items in the Menu tab.'} />}
             renderItem={({ item }) => <Tile name={item.name} sub={item.variants.length ? `from ${inr(item.price)}` : inr(item.price)} fav={item.favourite} quantity={quantityFor(item)} onDecrease={() => decreaseProduct(item)} onPress={() => tap(item)} />} />
         </View>
-        {L.twoPane ? <View style={{ width: 420, borderLeftWidth: 1, borderLeftColor: t.line }}>
+        {L.twoPane ? <View style={{ width: L.cartWidth, borderLeftWidth: 1, borderLeftColor: t.line }}>
           <View style={{ flex: 1, padding: 14 }}><H2>Current bill</H2><ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 12, paddingVertical: 8 }} keyboardShouldPersistTaps="handled">{cartSections}</ScrollView></View>
           {cartFooter(keyboardOpen || height < 460)}
         </View> : null}

@@ -14,7 +14,7 @@ import type { Bill, Me, Route } from './core/types';
 import { Tone, useTheme } from './ui/kit';
 
 export type ScreenName = 'bill-detail' | 'devices' | 'printer' | 'business' | 'notifications' | 'support' | 'subscription' | 'drafts' | 'mpin' | 'inventory';
-export type Tab = 'bill' | 'menu' | 'sales' | 'reports' | 'more';
+export type Tab = 'bill' | 'menu' | 'sales-reports' | 'inventory' | 'more';
 interface Ctx {
   eng: Engine; route: Route; setRoute: (r: Route) => void; me: Me | null; reloadMe: () => Promise<void>; refreshAll: () => Promise<void>;
   stack: { name: ScreenName; params?: any }[]; push: (name: ScreenName, params?: any) => void; back: () => void; tab: Tab; setTab: (t: Tab) => void;

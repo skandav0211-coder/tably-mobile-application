@@ -186,6 +186,11 @@ export class Engine {
   }
   async archiveProduct(id:string){ await this.call(()=>this.d.api.archiveProduct(id)); return this.products(true); }
   async restoreProduct(id:string){ await this.call(()=>this.d.api.restoreProduct(id)); return this.products(true); }
+  async deleteProduct(id: string) {
+    if (!this.canBill()) throw new PaidRequiredError();
+    await this.call(() => this.d.api.deleteProduct(id));
+    return this.products(true, true);
+  }
   async saveProduct(id: string | null, p: Partial<Omit<Product, 'id'>>) {
     const body: Record<string, unknown> = { ...p };
     if (id) await this.call(() => this.d.api.updateProduct(id, body)); else await this.call(() => this.d.api.addProduct(body));

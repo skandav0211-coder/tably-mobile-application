@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { computeReorder, displayInventoryQuantity, parseInventoryQuantity } from '../src/core/inventory';
+import { parseInventoryCsv } from '../src/core/inventoryImport';
 import { makeEngine, onboard, approve, startBackend } from './helpers';
 import type { InventoryItem, InventoryOrder, InventoryUsage, CartLine } from '../src/core/types';
 import { NetworkError } from '../src/core/api';
@@ -41,6 +42,25 @@ test('inventory quantity display and entry conversions preserve base units', () 
   assert.equal(parseInventoryQuantity('-2', 'g'), null);
 });
 
+test('inventory CSV import converts units and skips existing and repeated item names', () => {
+  const parsed = parseInventoryCsv([
+    'name,unit,category,pack_size,pack_label,reorder_level,par_level,unit_cost,supplier,notes,opening_qty',
+    'Coffee beans,g,Ingredients,1000,bag,0.5 kg,1.25 kg,0.02,Roaster,Arabica,2 kg',
+    ' coffee   beans ,g,Other,1000,bag,0,0,,Other,Duplicate,0',
+    'Milk,ml,Dairy,1000,carton,500,2 l,0.01,Dairy Co,Whole,750 ml',
+    'Milk,ml,Dairy,1000,carton,0,0,,Dairy Co,Repeated,0',
+    'Invalid,kg,Other,1000,bag,0,0,,Other,Bad unit,0',
+  ].join('\n'), [{ name: 'Existing stock' }]);
+  assert.equal(parsed.candidates.length, 2);
+  assert.equal(parsed.duplicates, 2);
+  assert.equal(parsed.candidates[0].item.reorderLevel, 500);
+  assert.equal(parsed.candidates[0].item.parLevel, 1250);
+  assert.equal(parsed.candidates[0].openingQty, 2000);
+  assert.equal(parsed.candidates[1].item.parLevel, 2000);
+  assert.equal(parsed.candidates[1].openingQty, 750);
+  assert.match(parsed.errors[0], /unit must be g, ml, or pc/);
+});
+
 test('cached inventory includes pending offline movements as a visible stock estimate', async () => {
   const rig = makeEngine('https://api.example.test');
   await rig.eng.init();
@@ -79,6 +99,11 @@ test('inventory APIs, ledger, recipes, bill deduction, orders, offline queue and
     const product = (await rig.eng.saveProduct(null, { name: 'Espresso', price: 100, taxRate: 0 })).find(row => row.name === 'Espresso');
     assert.ok(product);
     await rig.eng.saveInventoryRecipe(product.id, [{ inventoryItemId: created.id, qty: 18, variantName: null }]);
+    await assert.rejects(() => rig.eng.deleteProduct(product.id), /inventory history/i);
+    const disposable = (await rig.eng.saveProduct(null, { name: 'Temporary product', price: 1 })).find(row => row.name === 'Temporary product');
+    assert.ok(disposable);
+    await rig.eng.deleteProduct(disposable.id);
+    assert.equal((await rig.eng.products(true, true)).some(row => row.id === disposable.id), false);
     const cartLine: CartLine = { key: 'espresso', itemId: product.id, productId: product.id, name: 'Espresso', price: 100, qty: 2, taxRate: 0 };
     const bill = await rig.eng.completeBill({ cartId: `inventory-bill-${Date.now()}`, lines: [cartLine], discount: 0, serviceChargePercent: 0, method: 'cash' });
     assert.deepEqual(await rig.store.listPendingLocalSaleUsage(), [{ clientTxnId: bill.clientTxnId, inventoryItemId: created.id, qty: 36 }]);

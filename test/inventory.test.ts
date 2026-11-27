@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { computeReorder, displayInventoryQuantity, parseInventoryQuantity } from '../src/core/inventory';
-import { parseInventoryCsv } from '../src/core/inventoryImport';
+import { INVENTORY_CSV_TEMPLATE, parseInventoryCsv } from '../src/core/inventoryImport';
 import { makeEngine, onboard, approve, startBackend } from './helpers';
 import type { InventoryItem, InventoryOrder, InventoryUsage, CartLine } from '../src/core/types';
 import { NetworkError } from '../src/core/api';
@@ -13,7 +13,7 @@ const item = (patch: Partial<InventoryItem> = {}): InventoryItem => ({
 });
 const usage: InventoryUsage = {
   from: '2026-11-01T00:00:00.000Z', to: '2026-11-14T23:59:59.999Z',
-  byItem: [{ inventoryItemId: 'beans', name: 'Coffee beans', unit: 'g', opening: 0, purchased: 0, used: 98, wasted: 0, adjusted: 0, closing: 0, firstMovementAt: '2026-11-01T00:00:00.000Z' }],
+  byItem: [{ inventoryItemId: 'beans', name: 'Coffee beans', unit: 'g', opening: 0, purchased: 0, purchaseSpend: 0, used: 98, wasted: 0, adjusted: 0, closing: 0, firstMovementAt: '2026-11-01T00:00:00.000Z' }],
   byProduct: [],
 };
 const openOrder: InventoryOrder = {
@@ -61,6 +61,18 @@ test('inventory CSV import converts units and skips existing and repeated item n
   assert.match(parsed.errors[0], /unit must be g, ml, or pc/);
 });
 
+test('inventory CSV template imports custom package sizes, pack thresholds, pack costs, and opening packs', () => {
+  const parsed = parseInventoryCsv(INVENTORY_CSV_TEMPLATE, []);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.candidates.length, 1);
+  assert.deepEqual(parsed.candidates[0].item, {
+    name: 'Coffee beans', unit: 'g', packSize: 1000, reorderLevel: 2000, parLevel: 10000,
+    unitCost: 0.3, category: 'Ingredients', packLabel: 'bag', supplier: 'ABC Foods',
+    notes: 'Arabica beans',
+  });
+  assert.equal(parsed.candidates[0].openingQty, 4000);
+});
+
 test('cached inventory includes pending offline movements as a visible stock estimate', async () => {
   const rig = makeEngine('https://api.example.test');
   await rig.eng.init();
@@ -90,10 +102,14 @@ test('inventory APIs, ledger, recipes, bill deduction, orders, offline queue and
 
     const created = await rig.eng.saveInventoryItem(null, {
       name: 'Coffee beans', unit: 'g', packSize: 1000, packLabel: 'bag', reorderLevel: 250,
-      parLevel: 1500, supplier: 'Roaster',
+      parLevel: 1500, unitCost: 0.3, supplier: 'Roaster',
     }, 5000);
     assert.equal(created.onHand, 5000);
     assert.equal(created.status, 'ok');
+    await rig.eng.queueInventoryMovement({ inventoryItemId: created.id, type: 'purchase', qty: 1000, unitCost: 0.3, clientMoveId: 'pack-purchase' });
+    const purchaseUsage = await rig.eng.inventoryUsage('0000', '9999');
+    assert.equal(purchaseUsage.byItem.find(row => row.inventoryItemId === created.id)?.purchaseSpend, 300);
+    await rig.eng.queueInventoryMovement({ inventoryItemId: created.id, type: 'adjustment', qty: 5000, clientMoveId: 'pack-adjustment' });
     await assert.rejects(() => rig.eng.saveInventoryItem(null, { name: 'Coffee beans', unit: 'g' }), /already exists/i);
 
     const product = (await rig.eng.saveProduct(null, { name: 'Espresso', price: 100, taxRate: 0 })).find(row => row.name === 'Espresso');

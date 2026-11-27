@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from '@e965/xlsx';
-import { parseCsvRows, parseMenuRows, parseXlsxRows } from '../src/core/menuImport';
+import { MENU_CSV_TEMPLATE, parseCsvRows, parseMenuRows, parseXlsxRows } from '../src/core/menuImport';
 
 test('CSV parser supports quoted commas, escaped quotes, and embedded newlines', () => {
   assert.deepEqual(parseCsvRows('Item,Price,Size\r\n"Tea, Assam",25,"Small"\r\n"Tea ""Special""",30,"Large"\r\n"Two\nlines",5,'), [
@@ -11,6 +11,16 @@ test('CSV parser supports quoted commas, escaped quotes, and embedded newlines',
     ['Two\nlines', '5', ''],
   ]);
   assert.throws(() => parseCsvRows('Item,Price\n"Tea,10'), /unclosed quoted field/i);
+});
+
+test('menu CSV template uses the importer header names and can be filled with menu rows', () => {
+  const rows = parseCsvRows(MENU_CSV_TEMPLATE + 'Latte,Coffee,LATTE-01,120,,5\nLatte,Coffee,LATTE-01,150,Large,5');
+  const parsed = parseMenuRows(rows);
+  assert.equal(parsed.errors.length, 0);
+  assert.deepEqual(parsed.products, [{
+    name: 'Latte', category: 'Coffee', sku: 'LATTE-01', price: 120, taxRate: 5,
+    variants: [{ name: 'Large', priceDelta: 30, kind: 'variant' }],
+  }]);
 });
 
 test('menu rows group sizes into one product and use the smallest size as the base price', () => {

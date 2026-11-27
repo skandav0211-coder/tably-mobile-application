@@ -190,7 +190,7 @@ export function NewBill() {
     </View>
   );
 
-  const avail = L.width - (L.rail ? 88 : 0) - (L.twoPane ? L.cartWidth : 0); const cols = Math.max(2, Math.floor(avail / 165));
+  const avail = L.width - (L.rail ? L.railWidth : 0) - (L.twoPane ? L.cartWidth : 0); const cols = Math.max(2, Math.floor(avail / (L.compact ? 145 : 165)));
   return (
     <View style={{ flex: 1 }}>
       <Header title="New bill" right={<Pressable onPress={() => push('drafts')} hitSlop={10} style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}><Ionicons name="document-text-outline" size={20} color={t.pri} /><Txt tone="ok" bold>Drafts</Txt></Pressable>} />

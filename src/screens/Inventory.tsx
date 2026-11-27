@@ -7,15 +7,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../AppContext';
 import { computeReorder, displayInventoryQuantity, parseInventoryQuantity } from '../core/inventory';
 import type { InventoryItem, InventoryItemInput, InventoryMovementInput, InventoryOrder, InventorySettings, InventoryUsage, InventoryUnit, RecipeLine, Product } from '../core/types';
-import { parseInventoryCsv, type InventoryImportCandidate, type InventoryImportPreview } from '../core/inventoryImport';
+import { INVENTORY_CSV_TEMPLATE, parseInventoryCsv, type InventoryImportCandidate, type InventoryImportPreview } from '../core/inventoryImport';
 import { Banner, Btn, Card, Chip, Divider, Empty, F, Header, H2, Input, Pill, Row, Screen, Sheet, Txt, useLayout, useTheme } from '../ui/kit';
 import { inr } from '../core/calc';
 import { shareCsv } from '../print/share';
 
 type ViewMode = 'list' | 'detail' | 'usage' | 'orders';
 type Filter = 'all' | 'low' | 'out' | 'archived';
-type DraftItem = { name: string; category: string; unit: InventoryUnit; packSize: string; packLabel: string; reorderLevel: string; parLevel: string; unitCost: string; supplier: string; notes: string; openingQty: string };
-const emptyDraft: DraftItem = { name: '', category: '', unit: 'g', packSize: '1000', packLabel: 'bag', reorderLevel: '0', parLevel: '0', unitCost: '', supplier: '', notes: '', openingQty: '0' };
+type DraftItem = { name: string; category: string; unit: InventoryUnit; packSize: string; packLabel: string; reorderLevel: string; parLevel: string; packCost: string; supplier: string; notes: string; openingPacks: string };
+const emptyDraft: DraftItem = { name: '', category: '', unit: 'g', packSize: '1000', packLabel: 'bag', reorderLevel: '0', parLevel: '0', packCost: '', supplier: '', notes: '', openingPacks: '0' };
 const nowRange = (days: number) => {
   const to = new Date();
   const from = new Date(to);
@@ -40,12 +40,11 @@ const quantityIn = (value: string, label: string, unit: InventoryUnit) => {
   if (parsed == null || parsed > 1e9) throw new Error(`${label} must be a valid quantity in ${unit === 'g' ? 'g or kg' : unit === 'ml' ? 'ml or l' : 'pc or dozen'}.`);
   return parsed;
 };
-const inventoryCsvTemplate = 'name,unit,category,pack_size,pack_label,reorder_level,par_level,unit_cost,supplier,notes,opening_qty\nCoffee beans,g,Ingredients,1000,bag,250,1000,0.02,ABC Foods,Arabica beans,5000';
+const packQuantity = (value: string, label: string) => quantity(value, label);
 function ActionIcon({ name, label, onPress }: { name: React.ComponentProps<typeof Ionicons>['name']; label: string; onPress: () => void }) {
   const t = useTheme();
   return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={8} style={{ minWidth: 42, minHeight: 42, alignItems: 'center', justifyContent: 'center' }}><Ionicons name={name} size={22} color={t.pri} /></Pressable>;
 }
-
 export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
   const { eng, back, toast, canBill, me, uuid } = useApp();
   const t = useTheme();
@@ -132,7 +131,7 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
   function startCreate() { setEditItem(null); setForm(emptyDraft); setItemSheet(true); }
   function startEdit(item: InventoryItem) {
     setEditItem(item);
-    setForm({ name: item.name, category: item.category || '', unit: item.unit, packSize: String(item.packSize), packLabel: item.packLabel || '', reorderLevel: String(item.reorderLevel), parLevel: String(item.parLevel), unitCost: item.unitCost == null ? '' : String(item.unitCost), supplier: item.supplier || '', notes: item.notes || '', openingQty: '0' });
+    setForm({ name: item.name, category: item.category || '', unit: item.unit, packSize: String(item.packSize), packLabel: item.packLabel || '', reorderLevel: String(item.reorderLevel / item.packSize), parLevel: String(item.parLevel / item.packSize), packCost: item.unitCost == null ? '' : String(item.unitCost * item.packSize), supplier: item.supplier || '', notes: item.notes || '', openingPacks: '0' });
     setItemSheet(true);
   }
   async function saveItem() {
@@ -142,11 +141,11 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
       if (!Number.isFinite(packSize) || packSize <= 0) throw new Error('Pack size must be greater than zero.');
       const data: InventoryItemInput = {
         name: form.name.trim(), unit: form.unit, packSize, packLabel: form.packLabel.trim() || null,
-        category: form.category.trim() || null, reorderLevel: quantityIn(form.reorderLevel, 'Reorder level', form.unit),
-        parLevel: quantityIn(form.parLevel, 'Par level', form.unit), unitCost: form.unitCost.trim() ? quantity(form.unitCost, 'Unit cost') : null,
+        category: form.category.trim() || null, reorderLevel: quantity(form.reorderLevel, 'Reorder level') * packSize,
+        parLevel: quantity(form.parLevel, 'Par level') * packSize, unitCost: form.packCost.trim() ? quantity(form.packCost, 'Pack cost') / packSize : null,
         supplier: form.supplier.trim() || null, notes: form.notes.trim() || null,
       };
-      const saved = await eng.saveInventoryItem(editItem?.id || null, data, editItem ? undefined : quantityIn(form.openingQty || '0', 'Opening stock', form.unit));
+      const saved = await eng.saveInventoryItem(editItem?.id || null, data, editItem ? undefined : packQuantity(form.openingPacks || '0', 'Opening packs') * packSize);
       setItems(old => old.some(item => item.id === saved.id) ? old.map(item => item.id === saved.id ? saved : item) : [...old, saved]);
       setItemSheet(false); toast(editItem ? 'Inventory item updated.' : 'Inventory item added.', 'ok');
       setSelected(saved);
@@ -169,7 +168,7 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
     } finally { setImportBusy(false); }
   }
   async function shareInventoryTemplate() {
-    try { await shareCsv(inventoryCsvTemplate, 'tably-inventory-template.csv'); }
+    try { await shareCsv(INVENTORY_CSV_TEMPLATE, 'tably-inventory-template.csv'); }
     catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
   }
   async function applyInventoryImport() {
@@ -202,18 +201,35 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
   async function saveMovement() {
     if (!chosen || !movement) return;
     try {
-      const qty = quantityIn(moveQty, 'Quantity', chosen.unit);
+      const enteredQty = quantity(moveQty, movement === 'adjustment' ? 'Counted packs' : 'Packs');
+      const qty = enteredQty * chosen.packSize;
       if (movement !== 'adjustment' && qty <= 0) throw new Error('Quantity must be greater than zero.');
       const result = await eng.queueInventoryMovement({
         inventoryItemId: chosen.id, type: movement, qty,
         reason: moveReason.trim() || undefined, note: moveNote.trim() || undefined,
-        unitCost: movement === 'purchase' && moveCost.trim() ? quantity(moveCost, 'Unit cost') : undefined,
+        unitCost: movement === 'purchase' && moveCost.trim() ? quantity(moveCost, 'Pack cost') / chosen.packSize : undefined,
         clientMoveId: uuid(),
       });
       setMovement(null);
       await loadItems(); await refreshQueueCount();
       if (result === 'queued') { setOffline(true); toast('Connection interrupted. Movement saved on this device and will retry when you sync.', 'warn'); }
       else toast('Stock movement saved.', 'ok');
+    } catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
+  }
+  async function changeOnePack(direction: 'add' | 'remove') {
+    if (!chosen || (direction === 'remove' && chosen.onHand <= 0)) return;
+    const newBalance = direction === 'add' ? chosen.onHand + chosen.packSize : Math.max(0, chosen.onHand - chosen.packSize);
+    try {
+      const result = await eng.queueInventoryMovement({
+        inventoryItemId: chosen.id, type: direction === 'add' ? 'purchase' : 'adjustment',
+        qty: direction === 'add' ? chosen.packSize : newBalance,
+        reason: direction === 'add' ? `Added 1 ${chosen.packLabel || 'pack'}` : `Removed 1 ${chosen.packLabel || 'pack'}`,
+        unitCost: direction === 'add' ? chosen.unitCost ?? undefined : undefined,
+        clientMoveId: uuid(),
+      });
+      await loadItems(); await refreshQueueCount();
+      if (result === 'queued') { setOffline(true); toast('Connection interrupted. Package change was saved on this device and will retry when you sync.', 'warn'); }
+      else toast(`${direction === 'add' ? 'Added' : 'Removed'} one ${chosen.packLabel || 'pack'}.`, 'ok');
     } catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
   }
   async function archiveOrRestore(item: InventoryItem) {
@@ -337,6 +353,14 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
         <Card>
           <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}><View style={{ flex: 1, gap: 3 }}><H2>{chosen.name}</H2><Txt small mut>{chosen.category || 'Uncategorized'} · {chosen.supplier || 'No supplier'}</Txt></View><Pill text={chosen.status.toUpperCase()} tone={statusTone(chosen)} /></Row>
           <Txt style={{ fontFamily: F.head, fontSize: 30 }}>{displayInventoryQuantity(chosen.onHand, chosen.unit)}</Txt>
+          <Card style={{ marginVertical: 0 }}>
+            <Txt bold>Package stock · {chosen.packLabel || 'pack'} ({displayInventoryQuantity(chosen.packSize, chosen.unit)} each)</Txt>
+            <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <Btn kind="sec" small title={`− 1 ${chosen.packLabel || 'pack'}`} onPress={() => void changeOnePack('remove')} disabled={!canBill || chosen.onHand <= 0} />
+              <Txt bold>{(chosen.onHand / chosen.packSize).toFixed(2)} {chosen.packLabel || 'packs'}</Txt>
+              <Btn kind="sec" small title={`+ 1 ${chosen.packLabel || 'pack'}`} onPress={() => void changeOnePack('add')} disabled={!canBill} />
+            </Row>
+          </Card>
           {chosen.onHand < 0 ? <Txt small tone="warn">Stock is below zero. Check your physical count.</Txt> : null}
           <View style={{ height: 7, borderRadius: 99, backgroundColor: t.line, overflow: 'hidden' }}><View style={{ width: `${Math.min(100, chosen.parLevel > 0 ? Math.max(0, chosen.onHand / chosen.parLevel * 100) : chosen.onHand > 0 ? 100 : 0)}%`, height: '100%', backgroundColor: t.pri }} /></View>
           <Txt small mut>Reorder at {displayInventoryQuantity(chosen.reorderLevel, chosen.unit)} · Par {displayInventoryQuantity(chosen.parLevel, chosen.unit)}</Txt>
@@ -360,8 +384,9 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
       </Screen>
       <Sheet visible={!!movement} onClose={() => setMovement(null)} title={movement === 'purchase' ? 'Stock in' : movement === 'wastage' ? 'Record wastage' : movement === 'adjustment' ? 'Physical count' : 'Opening stock'}>
         {movement === 'adjustment' ? <Banner>Enter the quantity physically counted. Tably records the difference as an adjustment.</Banner> : null}
-        <Input label={movement === 'adjustment' ? `Counted quantity (${chosen.unit}${chosen.unit === 'g' ? ' / kg' : chosen.unit === 'ml' ? ' / l' : ' / dozen'})` : `Quantity (${chosen.unit}${chosen.unit === 'g' ? ' / kg' : chosen.unit === 'ml' ? ' / l' : ' / dozen'})`} value={moveQty} onChangeText={setMoveQty} keyboardType="decimal-pad" placeholder="0" />
-        {movement === 'purchase' ? <Input label="Cost per base unit (optional)" value={moveCost} onChangeText={setMoveCost} keyboardType="decimal-pad" placeholder="₹" /> : null}
+        <Input label={movement === 'adjustment' ? `Counted packages (${chosen.packLabel || 'packs'})` : `Quantity (${chosen.packLabel || 'packs'})`} value={moveQty} onChangeText={setMoveQty} keyboardType="decimal-pad" placeholder="0" />
+        <Txt small mut>One {chosen.packLabel || 'pack'} = {displayInventoryQuantity(chosen.packSize, chosen.unit)}. Partial packages can be entered as decimals.</Txt>
+        {movement === 'purchase' ? <Input label="Cost per package (optional)" value={moveCost} onChangeText={setMoveCost} keyboardType="decimal-pad" placeholder="₹" /> : null}
         <Input label={movement === 'wastage' ? 'Reason' : 'Reason (optional)'} value={moveReason} onChangeText={setMoveReason} placeholder={movement === 'wastage' ? 'Expired, damaged…' : 'e.g. delivery'} />
         <Input label="Note (optional)" value={moveNote} onChangeText={setMoveNote} placeholder="Add a note" multiline />
         <Btn title="Save movement" onPress={() => void saveMovement()} />
@@ -414,6 +439,19 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
           }} />
         </> : null}
         {usage ? <>
+          {(() => {
+            const availableValue = items.filter(item => item.active && item.unitCost != null).reduce((sum, item) => sum + Math.max(0, item.onHand) * (item.unitCost || 0), 0);
+            const itemsWithoutCost = items.filter(item => item.active && item.onHand > 0 && item.unitCost == null).length;
+            const purchaseSpend = usage.byItem.reduce((sum, row) => sum + row.purchaseSpend, 0);
+            return <>
+              <H2>Inventory value</H2>
+              <Row style={{ flexWrap: 'wrap' }}>
+                <View style={{ flex: 1, minWidth: 180 }}><Card><Txt small mut>Available stock value</Txt><H2>{inr(availableValue)}</H2><Txt small mut>Based on current on-hand stock and saved package cost.</Txt></Card></View>
+                <View style={{ flex: 1, minWidth: 180 }}><Card><Txt small mut>Purchase spend · selected period</Txt><H2>{inr(purchaseSpend)}</H2><Txt small mut>Uses costs entered when stock was received.</Txt></Card></View>
+              </Row>
+              {itemsWithoutCost ? <Banner tone="warn">{itemsWithoutCost} stocked item(s) have no package cost, so their value is not included.</Banner> : null}
+            </>;
+          })()}
           <H2>By ingredient</H2>
           <Btn kind="sec" small title="Export usage CSV" onPress={() => {
             const cell = (value: unknown) => {
@@ -421,12 +459,12 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
               const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
               return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
             };
-            const csv = ['item,unit,opening,purchased,used,wasted,adjusted,closing', ...usage.byItem.map(row => [row.name, row.unit, row.opening, row.purchased, row.used, row.wasted, row.adjusted, row.closing].map(cell).join(','))].join('\n');
+            const csv = ['item,unit,opening,purchased,recorded_purchase_spend,used,wasted,adjusted,closing', ...usage.byItem.map(row => [row.name, row.unit, row.opening, row.purchased, row.purchaseSpend, row.used, row.wasted, row.adjusted, row.closing].map(cell).join(','))].join('\n');
             shareCsv(csv, 'tably-inventory-usage.csv').catch(error => toast(error.message, 'bad'));
           }} />
           {usage.byItem.length ? usage.byItem.map(row => <Card key={row.inventoryItemId}>
             <Row style={{ justifyContent: 'space-between' }}><Txt bold style={{ flex: 1 }}>{row.name}</Txt><Txt bold>{displayInventoryQuantity(row.used, row.unit)} used</Txt></Row>
-            <Txt small mut>Opening {displayInventoryQuantity(row.opening, row.unit)} · Purchased {displayInventoryQuantity(row.purchased, row.unit)} · Wasted {displayInventoryQuantity(row.wasted, row.unit)} · Closing {displayInventoryQuantity(row.closing, row.unit)}</Txt>
+            <Txt small mut>Opening {displayInventoryQuantity(row.opening, row.unit)} · Purchased {displayInventoryQuantity(row.purchased, row.unit)} · Purchase spend {inr(row.purchaseSpend)} · Wasted {displayInventoryQuantity(row.wasted, row.unit)} · Closing {displayInventoryQuantity(row.closing, row.unit)}</Txt>
           </Card>) : <Empty text="No inventory usage in this period." />}
           <H2>By menu item</H2>
           {usage.byProduct.length ? usage.byProduct.map(row => <Card key={row.productId}><Row style={{ justifyContent: 'space-between' }}><Txt bold>{row.name}</Txt><Txt mut>Sold {row.sold}</Txt></Row>{row.ingredients.length ? row.ingredients.map(ingredient => <Txt small mut key={ingredient.inventoryItemId}>{ingredient.name} · {displayInventoryQuantity(ingredient.qty, items.find(item => item.id === ingredient.inventoryItemId)?.unit || 'pc')}</Txt>) : <Txt small mut>No recipe configured</Txt>}</Card>) : <Empty text="No menu-item usage was recorded for this period." />}
@@ -504,19 +542,19 @@ export function InventoryScreen({ embedded = false }: { embedded?: boolean }) {
         <Input label="Name" value={form.name} onChangeText={name => setForm(old => ({ ...old, name }))} placeholder="e.g. Coffee beans" maxLength={150} />
         <Input label="Category (optional)" value={form.category} onChangeText={category => setForm(old => ({ ...old, category }))} placeholder="e.g. Ingredients" />
         <Txt small bold>Base unit</Txt><Row>{(['g', 'ml', 'pc'] as InventoryUnit[]).map(unit => <Chip key={unit} text={unit} on={form.unit === unit} onPress={() => setForm(old => ({ ...old, unit }))} />)}</Row>
-        <Row><View style={{ flex: 1 }}><Input label="Pack size (base units)" value={form.packSize} onChangeText={packSize => setForm(old => ({ ...old, packSize }))} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Input label="Pack label" value={form.packLabel} onChangeText={packLabel => setForm(old => ({ ...old, packLabel }))} placeholder="bag" maxLength={40} /></View></Row>
-        <Row><View style={{ flex: 1 }}><Input label={`Warn me at (${form.unit}${form.unit === 'g' ? ' / kg' : form.unit === 'ml' ? ' / l' : ' / dozen'})`} value={form.reorderLevel} onChangeText={reorderLevel => setForm(old => ({ ...old, reorderLevel }))} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Input label={`Par level (${form.unit}${form.unit === 'g' ? ' / kg' : form.unit === 'ml' ? ' / l' : ' / dozen'})`} value={form.parLevel} onChangeText={parLevel => setForm(old => ({ ...old, parLevel }))} keyboardType="decimal-pad" /></View></Row>
-        <Input label="Unit cost (optional)" value={form.unitCost} onChangeText={unitCost => setForm(old => ({ ...old, unitCost }))} keyboardType="decimal-pad" placeholder="₹ per base unit" />
+        <Row><View style={{ flex: 1 }}><Input label={`Units per ${form.packLabel || 'pack'} (${form.unit})`} value={form.packSize} onChangeText={packSize => setForm(old => ({ ...old, packSize }))} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Input label="Package name" value={form.packLabel} onChangeText={packLabel => setForm(old => ({ ...old, packLabel }))} placeholder="bag, packet, bottle" maxLength={40} /></View></Row>
+        <Row><View style={{ flex: 1 }}><Input label={`Warn me at (${form.packLabel || 'packs'})`} value={form.reorderLevel} onChangeText={reorderLevel => setForm(old => ({ ...old, reorderLevel }))} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Input label={`Par level (${form.packLabel || 'packs'})`} value={form.parLevel} onChangeText={parLevel => setForm(old => ({ ...old, parLevel }))} keyboardType="decimal-pad" /></View></Row>
+        <Input label="Cost per package (optional)" value={form.packCost} onChangeText={packCost => setForm(old => ({ ...old, packCost }))} keyboardType="decimal-pad" placeholder="₹ per bag / packet" />
         <Input label="Supplier (optional)" value={form.supplier} onChangeText={supplier => setForm(old => ({ ...old, supplier }))} />
         <Input label="Notes (optional)" value={form.notes} onChangeText={notes => setForm(old => ({ ...old, notes }))} multiline />
-        {!editItem ? <Input label={`Opening stock (${form.unit}${form.unit === 'g' ? ' / kg' : form.unit === 'ml' ? ' / l' : ' / dozen'})`} value={form.openingQty} onChangeText={openingQty => setForm(old => ({ ...old, openingQty }))} keyboardType="decimal-pad" /> : null}
+        {!editItem ? <Input label={`Opening quantity (${form.packLabel || 'packs'})`} value={form.openingPacks} onChangeText={openingPacks => setForm(old => ({ ...old, openingPacks }))} keyboardType="decimal-pad" /> : null}
         <Btn title={editItem ? 'Save changes' : 'Add item'} onPress={() => void saveItem()} disabled={!canBill} />
       </Sheet>
       <Sheet visible={!!inventoryImport} onClose={() => setInventoryImport(null)} title="Import inventory CSV">
-        <Txt small mut>Required columns: name, unit (g, ml, or pc). Optional: category, pack_size, pack_label, reorder_level, par_level, unit_cost, supplier, notes, opening_qty. Same-name items are skipped as duplicates.</Txt>
+        <Txt small mut>Use pack_size and pack_label for custom packets, bags, bottles, or other sizes. Enter reorder_packs, par_packs, pack_cost, and opening_packs as package counts or prices. pack_size is the amount in base units per package. Older reorder_level, par_level, unit_cost, and opening_qty columns are still accepted as base-unit values. Same-name items are skipped as duplicates.</Txt>
         {inventoryImport ? <>
           <Card><Txt bold>{inventoryImport.candidates.length} item(s) ready to import</Txt><Txt small mut>{inventoryImport.duplicates} duplicate(s) skipped</Txt></Card>
-          {inventoryImport.candidates.slice(0, 12).map(candidate => <Row key={`${candidate.row}-${candidate.item.name}`} style={{ justifyContent: 'space-between' }}><Txt style={{ flex: 1 }} numberOfLines={1}>{candidate.item.name}</Txt><Txt small mut>{candidate.item.unit} · opening {displayInventoryQuantity(candidate.openingQty, candidate.item.unit)}</Txt></Row>)}
+          {inventoryImport.candidates.slice(0, 12).map(candidate => <Row key={`${candidate.row}-${candidate.item.name}`} style={{ justifyContent: 'space-between' }}><Txt style={{ flex: 1 }} numberOfLines={1}>{candidate.item.name}</Txt><Txt small mut>{candidate.item.unit} · opening {(candidate.openingQty / (candidate.item.packSize || 1)).toFixed(2)} {candidate.item.packLabel || 'packs'}</Txt></Row>)}
           {inventoryImport.candidates.length > 12 ? <Txt small mut>And {inventoryImport.candidates.length - 12} more…</Txt> : null}
           {inventoryImport.errors.length ? <Card><Txt bold tone="warn">{inventoryImport.errors.length} issue(s)</Txt>{inventoryImport.errors.slice(0, 8).map((error, index) => <Txt small key={`${index}-${error}`} tone="warn">{error}</Txt>)}{inventoryImport.errors.length > 8 ? <Txt small mut>And {inventoryImport.errors.length - 8} more…</Txt> : null}</Card> : null}
           <Btn title={`Import ${inventoryImport.candidates.length} item(s)`} onPress={() => void applyInventoryImport()} loading={importBusy} disabled={!inventoryImport.candidates.length || !canBill} />
@@ -531,7 +569,7 @@ function InventoryRow({ item, onPress, statusTone }: { item: InventoryItem; onPr
   const t = useTheme();
   const fraction = item.parLevel > 0 ? Math.max(0, Math.min(1, item.onHand / item.parLevel)) : item.onHand > 0 ? 1 : 0;
   return <Card onPress={onPress}>
-    <Row style={{ justifyContent: 'space-between' }}><View style={{ flex: 1, gap: 3 }}><Txt bold>{item.name}</Txt><Txt small mut>{item.category || 'Uncategorized'}{item.supplier ? ` · ${item.supplier}` : ''}</Txt></View><View style={{ alignItems: 'flex-end', gap: 5 }}><Txt bold>{displayInventoryQuantity(item.onHand, item.unit)}</Txt><Pill text={item.active ? item.status.toUpperCase() : 'ARCHIVED'} tone={item.active ? statusTone : 'info'} /></View></Row>
+    <Row style={{ justifyContent: 'space-between' }}><View style={{ flex: 1, gap: 3 }}><Txt bold>{item.name}</Txt><Txt small mut>{item.category || 'Uncategorized'}{item.supplier ? ` · ${item.supplier}` : ''}</Txt></View><View style={{ alignItems: 'flex-end', gap: 5 }}><Txt bold>{displayInventoryQuantity(item.onHand, item.unit)}</Txt><Txt small mut>{(item.onHand / item.packSize).toFixed(2)} {item.packLabel || 'packs'}</Txt><Pill text={item.active ? item.status.toUpperCase() : 'ARCHIVED'} tone={item.active ? statusTone : 'info'} /></View></Row>
     <View style={{ height: 6, borderRadius: 99, backgroundColor: t.line, overflow: 'hidden' }}><View style={{ width: `${fraction * 100}%`, height: '100%', backgroundColor: item.status === 'out' ? t.bad : item.status === 'low' ? t.warn : t.ok }} /></View>
     <Txt small mut>Reorder {displayInventoryQuantity(item.reorderLevel, item.unit)} · Par {displayInventoryQuantity(item.parLevel, item.unit)}</Txt>
   </Card>;

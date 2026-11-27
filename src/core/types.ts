@@ -55,7 +55,7 @@ export interface InventoryMovementInput {
 export interface RecipeLine { inventoryItemId: string; qty: number; variantName: string | null }
 export interface InventoryUsage {
   from: string; to: string;
-  byItem: { inventoryItemId: string; name: string; unit: InventoryUnit; opening: number; purchased: number; used: number; wasted: number; adjusted: number; closing: number; firstMovementAt?: string | null }[];
+  byItem: { inventoryItemId: string; name: string; unit: InventoryUnit; opening: number; purchased: number; purchaseSpend: number; used: number; wasted: number; adjusted: number; closing: number; firstMovementAt?: string | null }[];
   byProduct: { productId: string; name: string; sold: number; ingredients: { inventoryItemId: string; name: string; qty: number }[] }[];
 }
 export interface InventoryOrder {

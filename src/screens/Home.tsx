@@ -43,17 +43,17 @@ export function Home() {
     </View>);
   if (L.rail) return (
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: t.bg }}>
-      <ScrollView style={{ width: 92, backgroundColor: t.side }} contentContainerStyle={{ alignItems: 'center', paddingTop: ins.top + 16, paddingBottom: Math.max(ins.bottom, 12), gap: 6 }} showsVerticalScrollIndicator={false}>
+      <ScrollView style={{ width: L.railWidth, backgroundColor: t.side }} contentContainerStyle={{ alignItems: 'center', paddingTop: ins.top + (L.compact ? 8 : 16), paddingBottom: Math.max(ins.bottom, 12), gap: L.compact ? 2 : 6 }} showsVerticalScrollIndicator={false}>
         <Mark size={44} /><View style={{ height: 14 }} />
-        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ width: 76, minHeight: 58, paddingVertical: 8, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: tab === x.k ? 'rgba(217,115,28,0.22)' : 'transparent' }} accessibilityRole="tab" accessibilityLabel={x.label} accessibilityState={{ selected: tab === x.k }}>
-          <Ionicons name={x.icon} size={24} color={tab === x.k ? '#F59A4A' : '#CDBFBF'} /><Txt small numberOfLines={2} style={{ maxWidth: 72, textAlign: 'center', fontSize: 11, lineHeight: 13, color: tab === x.k ? '#F59A4A' : '#CDBFB5', fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
+        {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ width: L.railWidth - 8, minHeight: L.compact ? 48 : 58, paddingVertical: L.compact ? 4 : 8, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: tab === x.k ? 'rgba(217,115,28,0.22)' : 'transparent' }} accessibilityRole="tab" accessibilityLabel={x.label} accessibilityState={{ selected: tab === x.k }}>
+          <Ionicons name={x.icon} size={L.compact ? 20 : 24} color={tab === x.k ? '#F59A4A' : '#CDBFBF'} /><Txt small numberOfLines={2} style={{ maxWidth: L.railWidth - 12, textAlign: 'center', fontSize: L.compact ? 10 : 11, lineHeight: 13, color: tab === x.k ? '#F59A4A' : '#CDBFB5', fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}
       </ScrollView>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>{body}</SafeAreaView>
     </View>);
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>{body}</SafeAreaView>
-      <View style={{ flexDirection: 'row', backgroundColor: t.card, borderTopWidth: 1, borderTopColor: t.line, paddingBottom: Math.max(ins.bottom, 6), paddingTop: 6 }}>
+      <View style={{ flexDirection: 'row', backgroundColor: t.card, borderTopWidth: 1, borderTopColor: t.line, paddingBottom: Math.max(ins.bottom, L.compact ? 2 : 6), paddingTop: L.compact ? 2 : 6 }}>
         {TABS.map(x => <Pressable key={x.k} onPress={() => setTab(x.k)} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 2, paddingVertical: 4 }} accessibilityRole="tab" accessibilityLabel={x.label} accessibilityState={{ selected: tab === x.k }}>
           <View style={{ paddingHorizontal: 16, paddingVertical: 3, borderRadius: 14, backgroundColor: tab === x.k ? t.priSoft : 'transparent' }}><Ionicons name={x.icon} size={22} color={tab === x.k ? t.pri : t.mut} /></View>
           <Txt small numberOfLines={2} style={{ maxWidth: '100%', textAlign: 'center', fontSize: 10, lineHeight: 12, color: tab === x.k ? t.pri : t.mut, fontFamily: F.bold }}>{x.label}</Txt></Pressable>)}

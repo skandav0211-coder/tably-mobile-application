@@ -15,6 +15,8 @@ export interface MenuImportResult {
   errors: string[];
 }
 
+export const MENU_CSV_TEMPLATE = 'Item,Category,SKU,Price,Size,Tax\n';
+
 const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 

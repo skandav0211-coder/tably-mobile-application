@@ -403,7 +403,7 @@ export class Engine {
   }
   async queueInventoryMovement(movement: InventoryMovementInput): Promise<'synced' | 'queued'> {
     if (!this.canBill()) throw new PaidRequiredError();
-    if (!Number.isFinite(movement.qty) || movement.qty <= 0) throw new Error('Enter a quantity greater than zero.');
+    if (!Number.isFinite(movement.qty) || movement.qty < 0 || (movement.qty === 0 && movement.type !== 'adjustment')) throw new Error('Enter a valid quantity greater than zero.');
     try {
       await this.call(() => this.d.api.createInventoryMovement(movement));
       await this.refreshInventoryItems();

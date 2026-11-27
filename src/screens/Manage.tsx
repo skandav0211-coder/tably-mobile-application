@@ -8,7 +8,7 @@ import { Banner, Btn, Card, Chip, Empty, F, Header, H2, Input, Pill, Row, Screen
 import { inr } from '../core/calc';
 import { reportHtml } from '../core/receipt';
 import type { Bill, InventoryItem, Product, RecipeLine, ReportData, Variant } from '../core/types';
-import { parseCsvRows, parseMenuRows, parseXlsxRows, type ImportedMenuProduct } from '../core/menuImport';
+import { MENU_CSV_TEMPLATE, parseCsvRows, parseMenuRows, parseXlsxRows, type ImportedMenuProduct } from '../core/menuImport';
 import { sharePdf, shareCsv } from '../print/share';
 import { statusTone } from './Billing';
 
@@ -112,6 +112,10 @@ export function Menu() {
       toast(error instanceof Error ? error.message : String(error), 'bad');
     } finally { setImportBusy(false); }
   }
+  async function shareMenuTemplate() {
+    try { await shareCsv(MENU_CSV_TEMPLATE, 'tably-menu-template.csv'); }
+    catch (error) { toast(error instanceof Error ? error.message : String(error), 'bad'); }
+  }
   async function applyImport() {
     const selected = importRows.filter(row => row.action !== 'skip');
     if (!selected.length) { setShowImport(false); toast('No menu items selected for import.', 'warn'); return; }
@@ -144,7 +148,11 @@ export function Menu() {
       <Screen max={760}>
         <Input value={q} onChangeText={setQ} placeholder={archived?'Search archived items':'Search menu'} />
         <Row><View style={{flex:1}}><Btn kind={!archived?'pri':'sec'} small title="Menu" onPress={()=>setArchived(false)} /></View><View style={{flex:1}}><Btn kind={archived?'pri':'sec'} small title={`Archived items (${items.filter(p=>!p.active).length})`} onPress={()=>setArchived(true)} /></View></Row>
-        <Btn title="Import CSV / Excel" kind="sec" small onPress={() => canBill ? void pickMenuFile() : toast('An active subscription is required to import menu items.', 'warn')} loading={importBusy} disabled={!canBill} style={{ alignSelf: 'flex-start' }} />
+        <Row>
+          <View style={{ flex: 1 }}><Btn title="Import CSV / Excel" kind="sec" small onPress={() => canBill ? void pickMenuFile() : toast('An active subscription is required to import menu items.', 'warn')} loading={importBusy} disabled={!canBill} /></View>
+          <View style={{ flex: 1 }}><Btn title="CSV template" kind="sec" small onPress={() => void shareMenuTemplate()} /></View>
+        </Row>
+        <Banner tone="info">Download the CSV template and fill in Item and Price. Add optional Category, SKU, Size and Tax. For size options, repeat the item name on each row and enter each size with its price.</Banner>
         {!canBill ? <Banner tone="warn">Menu changes need an active subscription.</Banner> : null}
         {shown.length === 0 ? <Empty text={archived?'Nothing archived. Items you archive will appear here.':items.length?'No items match.':'Your menu is empty. Tap “Add item” to start.'} /> : shown.map(p => (
           <Card key={p.id} onPress={() => archived ? toast('Use Restore to put this item back on the menu.','info') : open(p)}>

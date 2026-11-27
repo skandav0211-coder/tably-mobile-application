@@ -5,6 +5,8 @@ import { parseCsvRows } from './menuImport';
 export type InventoryImportCandidate = { row: number; item: InventoryItemInput; openingQty: number };
 export type InventoryImportPreview = { candidates: InventoryImportCandidate[]; duplicates: number; errors: string[] };
 
+export const INVENTORY_CSV_TEMPLATE = 'name,unit,category,pack_size,pack_label,reorder_packs,par_packs,pack_cost,supplier,notes,opening_packs\nCoffee beans,g,Ingredients,1000,bag,2,10,300,ABC Foods,Arabica beans,4';
+
 const normalizeName = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
 const quantity = (raw: string, label: string, unit: InventoryUnit, row: number) => {
   const parsed = parseInventoryQuantity(raw, unit);
@@ -24,8 +26,9 @@ export function parseInventoryCsv(text: string, existing: Pick<InventoryItem, 'n
   const columns = {
     category: col('category'), packSize: col('pack_size'), packLabel: col('pack_label'),
     reorderLevel: col('reorder_level', 'reorder'), parLevel: col('par_level', 'par'),
-    unitCost: col('unit_cost', 'cost'), supplier: col('supplier'), notes: col('notes'),
-    openingQty: col('opening_qty', 'opening_stock', 'on_hand'),
+    reorderPacks: col('reorder_packs'), parPacks: col('par_packs'),
+    unitCost: col('unit_cost', 'cost'), packCost: col('pack_cost'), supplier: col('supplier'), notes: col('notes'),
+    openingQty: col('opening_qty', 'opening_stock', 'on_hand'), openingPacks: col('opening_packs'),
   };
   const names = new Set(existing.map(item => normalizeName(item.name)));
   const candidates: InventoryImportCandidate[] = [];
@@ -49,17 +52,27 @@ export function parseInventoryCsv(text: string, existing: Pick<InventoryItem, 'n
       const rawUnit = value(row, unitCol).toLowerCase();
       if (!['g', 'ml', 'pc'].includes(rawUnit)) throw new Error(`Row ${rowNum} (${name}): unit must be g, ml, or pc.`);
       const unit = rawUnit as InventoryUnit;
-      const packSize = numberValue(value(row, columns.packSize), unit === 'pc' ? 1 : 1000, 'pack_size', rowNum);
+      const rawPackSize = value(row, columns.packSize);
+      const packSize = rawPackSize ? quantity(rawPackSize, 'pack_size', unit, rowNum) : unit === 'pc' ? 1 : 1000;
       if (packSize <= 0) throw new Error(`Row ${rowNum} (${name}): pack_size must be greater than zero.`);
-      const reorderLevel = value(row, columns.reorderLevel) ? quantity(value(row, columns.reorderLevel), 'reorder_level', unit, rowNum) : 0;
-      const parLevel = value(row, columns.parLevel) ? quantity(value(row, columns.parLevel), 'par_level', unit, rowNum) : 0;
-      const rawCost = value(row, columns.unitCost);
-      const unitCost = numberValue(rawCost, 0, 'unit_cost', rowNum);
-      const openingQty = value(row, columns.openingQty) ? quantity(value(row, columns.openingQty), 'opening_qty', unit, rowNum) : 0;
+      const reorderLevel = value(row, columns.reorderPacks)
+        ? numberValue(value(row, columns.reorderPacks), 0, 'reorder_packs', rowNum) * packSize
+        : value(row, columns.reorderLevel) ? quantity(value(row, columns.reorderLevel), 'reorder_level', unit, rowNum) : 0;
+      const parLevel = value(row, columns.parPacks)
+        ? numberValue(value(row, columns.parPacks), 0, 'par_packs', rowNum) * packSize
+        : value(row, columns.parLevel) ? quantity(value(row, columns.parLevel), 'par_level', unit, rowNum) : 0;
+      const rawPackCost = value(row, columns.packCost);
+      const rawUnitCost = value(row, columns.unitCost);
+      const unitCost = rawPackCost
+        ? numberValue(rawPackCost, 0, 'pack_cost', rowNum) / packSize
+        : rawUnitCost ? numberValue(rawUnitCost, 0, 'unit_cost', rowNum) : null;
+      const openingQty = value(row, columns.openingPacks)
+        ? numberValue(value(row, columns.openingPacks), 0, 'opening_packs', rowNum) * packSize
+        : value(row, columns.openingQty) ? quantity(value(row, columns.openingQty), 'opening_qty', unit, rowNum) : 0;
       candidates.push({
         row: rowNum,
         item: {
-          name, unit, packSize, reorderLevel, parLevel, unitCost: rawCost ? unitCost : null,
+          name, unit, packSize, reorderLevel, parLevel, unitCost,
           category: value(row, columns.category) || null, packLabel: value(row, columns.packLabel) || null,
           supplier: value(row, columns.supplier) || null, notes: value(row, columns.notes) || null,
         },
